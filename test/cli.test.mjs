@@ -25,7 +25,7 @@ function fixture(t) {
 }
 async function cli(f, args, input = '', { fail = false } = {}) {
   return new Promise((resolve, reject) => {
-    const child = execFile(process.execPath, [bin, '--project', f.project, ...args], {
+    const child = execFile(process.execPath, [bin, '--project', f.project, ...(args[0] === 'setup' ? ['--json'] : []), ...args], {
       env: { ...process.env, MINDMUX_HOME: f.home }, timeout: 15000, maxBuffer: 1024 * 1024,
     }, (error, stdout, stderr) => {
       if (fail) { if (!error) return reject(new Error('Expected command failure')); resolve({ stderr, stdout }); }

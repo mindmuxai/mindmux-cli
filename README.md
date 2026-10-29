@@ -34,6 +34,8 @@ Use the Up/Down arrow keys and Enter to select agents, Workspaces, Projects, and
 
 The wizard also handles browser login. It installs project-level MCP configuration and agent instructions/hooks, then performs a real stdio MCP handshake and a read-only recall check.
 
+Setup finishes with a short confirmation and instructions to restart your agent. For scripts or troubleshooting, use `mmx setup --json` to return the full structured result, including diagnostics and the backup path.
+
 Existing valid credentials and project bindings are reused. Repeating setup updates managed entries without registering duplicates. Browser authorization and the agent's own project, MCP, and hook trust prompts still require user interaction.
 
 Explicit options are available for automation:
@@ -99,7 +101,7 @@ The CLI maintains its own credentials rather than reading agent credentials. Cre
 
 ## Brain operations
 
-Commands return JSON by default.
+Brain commands return JSON by default.
 
 ```bash
 mmx brain status

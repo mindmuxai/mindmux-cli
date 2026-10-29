@@ -1,5 +1,5 @@
 import { parseArgs } from 'node:util';
-import { resolve, join } from 'node:path';
+import { resolve, join, basename } from 'node:path';
 import { existsSync, readdirSync, rmSync, realpathSync } from 'node:fs';
 import { binding, projectRoot, preferences, mergePreferences, ignoreRuntime, readJson, writeJson, homeDir, serverUrl, DEFAULT_SERVER } from './storage.mjs';
 import { localCommand, withBrain } from './brain.mjs';
@@ -13,6 +13,7 @@ const HELP = `mmx — project Brain operations and agent integrations (v0.1.0)
 Setup:
   mmx setup [--agent claude-code,codex]      login, choose Brain, install MCP + rules/hooks
   mmx setup --local --agent codex --yes     local Brain without Cloud login
+  mmx setup --json                         return detailed setup results as JSON
   mmx remove [--agent NAME]                 remove setup entries; keep data and login
   mmx init --local                          initialize/reuse a local Brain
   mmx login [--server URL] [--no-open]       OAuth PKCE browser login
@@ -66,7 +67,7 @@ function cloudVersion(value) {
 
 export async function main(argv = process.argv.slice(2)) {
   const options = Object.fromEntries(['project', 'agent', 'brain-id', 'server', 'workspace-id', 'name', 'description', 'id', 'title', 'category', 'status', 'source', 'expected-version', 'summary', 'kind', 'args'].map(key => [key, { type: 'string' }]));
-  for (const key of ['local', 'online', 'no-open', 'confirm', 'help', 'version', 'yes', 'migrate']) options[key] = { type: 'boolean' };
+  for (const key of ['local', 'online', 'no-open', 'confirm', 'help', 'version', 'yes', 'migrate', 'json']) options[key] = { type: 'boolean' };
   const { values: flags, positionals: pos } = parseArgs({ args: argv, options, allowPositionals: true, strict: true });
   if (flags.version) { console.log('0.1.0'); return; }
   if (!pos.length || flags.help || pos[0] === 'help') { console.log(HELP); return; }
@@ -79,7 +80,14 @@ export async function main(argv = process.argv.slice(2)) {
   const selectedServer = () => serverUrl(flags.server || preferences(root).mindmuxCli?.server || readJson(join(homeDir(), 'config.json'), {}).server || DEFAULT_SERVER);
   if (command === 'setup' || command === 'remove') {
     const { setup, removeSetup } = await import('./setup.mjs');
-    output(await (command === 'setup' ? setup(root, flags) : removeSetup(root, flags))); return;
+    const result = await (command === 'setup' ? setup(root, flags) : removeSetup(root, flags));
+    if (command === 'remove' || flags.json) output(result);
+    else {
+      const agents = result.agents.map(agent => ({ 'claude-code': 'Claude Code', codex: 'Codex' })[agent] || agent).join(' and ');
+      const project = result.binding.kind === 'cloud' ? result.binding.name : basename(result.project);
+      console.log(`\n✓ MindMux is ready.\n\nProject: ${project}\nConnected to: ${agents}\n\nRestart ${agents} in this project and approve any trust prompts to get started.`);
+    }
+    return;
   }
   if (command === 'mcp' && action === 'serve') {
     const { serveMcp } = await import('./mcp-server.mjs');

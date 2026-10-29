@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
 import { once } from 'node:events';
 import { parse } from 'smol-toml';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -20,7 +21,7 @@ function fixture(t) {
 }
 function cli(f, args, fail = false) {
   return new Promise((resolve, reject) => {
-    const child = execFile(process.execPath, [bin, '--project', f.root, ...args], { env: { ...process.env, MINDMUX_HOME: f.home, CODEX_HOME: f.codexHome }, timeout: 45000 }, (error, stdout, stderr) => {
+    const child = execFile(process.execPath, [bin, '--project', f.root, ...(args[0] === 'setup' ? ['--json'] : []), ...args], { env: { ...process.env, MINDMUX_HOME: f.home, CODEX_HOME: f.codexHome }, timeout: 45000 }, (error, stdout, stderr) => {
       if (fail) return error ? resolve(stderr) : reject(new Error('Expected failure'));
       if (error) return reject(new Error(stderr || error.message));
       try { resolve(JSON.parse(stdout)); } catch { reject(new Error(stdout)); }
@@ -230,4 +231,26 @@ test('cancelling the interactive wizard releases its lock without creating or bi
   assert.equal(flow.calls.length, 0);
   assert.equal(existsSync(join(f.root, '.mindmux/preferences.json')), false);
   assert.equal(existsSync(join(f.root, '.mindmux/cli/setup.lock')), false);
+});
+
+
+test('setup defaults to a concise success message and supports explicit JSON output', async t => {
+  const f = fixture(t);
+  const run = promisify(execFile);
+  const args = [bin, '--project', f.root, 'setup', '--local', '--agent', 'claude-code,codex', '--yes'];
+  const options = { env: { ...process.env, MINDMUX_HOME: f.home, CODEX_HOME: f.codexHome }, timeout: 45000 };
+  const human = await run(process.execPath, args, options);
+  assert.match(human.stdout, /MindMux is ready/);
+  assert.match(human.stdout, /Project: project/);
+  assert.match(human.stdout, /Connected to: Claude Code and Codex/);
+  assert.match(human.stdout, /Restart Claude Code and Codex/);
+  assert.doesNotMatch(human.stdout, /brainId|toolCount|backup|installed|instructions|native hooks/);
+  assert.equal(human.stdout.includes(f.root), false);
+  assert.throws(() => JSON.parse(human.stdout));
+  const machine = await run(process.execPath, [...args, '--json'], options);
+  const report = JSON.parse(machine.stdout);
+  assert.equal(report.installed, true);
+  assert.equal(report.mcp.recall, true);
+  assert.deepEqual(report.agents, ['claude-code', 'codex']);
+  assert.ok(existsSync(report.backup));
 });
