@@ -160,3 +160,74 @@ test('interrupting setup during probe rolls back configuration and releases its 
   assert.equal(existsSync(join(f.root, '.mindmux/cli/setup.lock')), false);
   assert.ok(existsSync(join(f.root, 'brain/index.md')));
 });
+
+// Exercise the interactive flow without production credentials or remote writes.
+function interactiveFixture(t, f, projects = []) {
+  const originalHome = process.env.MINDMUX_HOME;
+  process.env.MINDMUX_HOME = f.home;
+  t.after(() => { if (originalHome === undefined) delete process.env.MINDMUX_HOME; else process.env.MINDMUX_HOME = originalHome; });
+  const calls = [];
+  const workspace = { id: 'test-workspace', name: 'Test Workspace' };
+  const cloud = async (_server, run) => {
+    const call = async (name, args) => {
+      calls.push({ name, args });
+      if (name === 'list_workspaces') return { workspaces: [workspace] };
+      if (name === 'list_projects') return { projects };
+      if (name === 'create_project') return { brainId: 'created-brain' };
+      if (name === 'resolve_brain') return { status: 'resolved', brain: { name: 'Test Brain' } };
+      throw new Error(`Unexpected tool: ${name}`);
+    };
+    call.listTools = async () => ({ tools: [] });
+    return run(call);
+  };
+  const login = async () => {};
+  const probe = async () => ({ recall: true });
+  return { calls, workspace, cloud, login, probe };
+}
+
+test('interactive setup creates a named Project only through the create option and confirmation', async t => {
+  const f = fixture(t); const flow = interactiveFixture(t, f);
+  const prompts = {
+    agents: async () => 'codex',
+    choose: async (message, choices) => {
+      if (message.includes('Workspace')) return choices[0].value;
+      assert.equal(choices.length, 1); // Empty Workspace still offers creation.
+      assert.match(choices[0].name, /Create a new Project/);
+      return choices[0].value;
+    },
+    projectName: async () => 'mindmux-cli',
+    confirm: async message => { assert.match(message, /mindmux-cli/); return true; },
+  };
+  const result = await setup(f.root, {}, { ...flow, prompts });
+  assert.equal(result.binding.brainId, 'created-brain');
+  assert.deepEqual(flow.calls.find(call => call.name === 'create_project').args, { workspaceId: 'test-workspace', name: 'mindmux-cli', description: '' });
+  assert.equal(existsSync(join(f.root, '.mindmux/cli/setup.lock')), false);
+});
+
+test('cancelling creation returns to the Project menu and can bind an existing Project', async t => {
+  const f = fixture(t); const project = { name: 'Existing Project', brainId: 'existing-brain' };
+  const flow = interactiveFixture(t, f, [project]); let projectMenus = 0;
+  const prompts = {
+    agents: async () => 'codex',
+    choose: async (message, choices) => {
+      if (message.includes('Workspace')) return choices[0].value;
+      projectMenus++;
+      return choices[projectMenus === 1 ? 0 : 1].value;
+    },
+    projectName: async () => 'Cancelled Project',
+    confirm: async () => false,
+  };
+  const result = await setup(f.root, {}, { ...flow, prompts });
+  assert.equal(projectMenus, 2);
+  assert.equal(result.binding.brainId, 'existing-brain');
+  assert.equal(flow.calls.some(call => call.name === 'create_project'), false);
+});
+
+test('cancelling the interactive wizard releases its lock without creating or binding a Brain', async t => {
+  const f = fixture(t); const flow = interactiveFixture(t, f);
+  const prompts = { agents: async () => { const error = new Error('cancelled'); error.name = 'ExitPromptError'; throw error; } };
+  await assert.rejects(setup(f.root, {}, { ...flow, prompts }), /Setup cancelled/);
+  assert.equal(flow.calls.length, 0);
+  assert.equal(existsSync(join(f.root, '.mindmux/preferences.json')), false);
+  assert.equal(existsSync(join(f.root, '.mindmux/cli/setup.lock')), false);
+});

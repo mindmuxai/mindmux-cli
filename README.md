@@ -28,7 +28,11 @@ The old `bin/mindmux.mjs` script remains as a compatibility entry point for exis
 
 ## Set up a project
 
-Run `mmx setup` inside the project you want to connect. The terminal wizard guides you through agent selection, browser login, Workspace and Project selection, or confirmed Project creation. It installs project-level MCP configuration and agent instructions/hooks, then performs a real stdio MCP handshake and a read-only recall check.
+Run `mmx setup` inside the project you want to connect.
+
+Use the Up/Down arrow keys and Enter to select agents, Workspaces, Projects, and confirmations. Select **+ Create a new Project** to create a Project; only its name requires typing. Empty, overlong, and duplicate names are validated in place so you can correct them without restarting. Cancelling creation returns to the Project menu; Ctrl+C exits setup.
+
+The wizard also handles browser login. It installs project-level MCP configuration and agent instructions/hooks, then performs a real stdio MCP handshake and a read-only recall check.
 
 Existing valid credentials and project bindings are reused. Repeating setup updates managed entries without registering duplicates. Browser authorization and the agent's own project, MCP, and hook trust prompts still require user interaction.
 

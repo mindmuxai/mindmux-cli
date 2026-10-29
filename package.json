@@ -21,6 +21,7 @@
     "check": "node --check bin/mmx.mjs && node --check bin/mindmux.mjs && npm test"
   },
   "dependencies": {
+    "@inquirer/prompts": "^7.10.1",
     "@mindmux/brain-md": "0.4.1",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "smol-toml": "^1.9.1"

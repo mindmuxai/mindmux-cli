@@ -2,7 +2,6 @@ import { existsSync, readFileSync, mkdirSync, rmSync, statSync, chmodSync } from
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID, createHash } from 'node:crypto';
-import { createInterface } from 'node:readline/promises';
 import { execFileSync } from 'node:child_process';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import { binding, preferences, mergePreferences, readJson, writeJson, writeAtomic, homeDir, DEFAULT_SERVER, serverUrl, ignoreRuntime } from './storage.mjs';
@@ -11,6 +10,7 @@ import { connect, integrationFiles, managedBlock } from './integrations.mjs';
 import { localCommand } from './brain.mjs';
 import { planHost, hostState, guardPath } from './host-config.mjs';
 import { probeMcp } from './mcp-server.mjs';
+import { createSetupPrompts } from './prompts.mjs';
 
 const supported = ['claude-code', 'codex'];
 const setupPath = root => join(root, '.mindmux/cli/setup.json');
@@ -81,20 +81,9 @@ function preflight(root, agents, manifest, migrate, remove = false) {
   });
 }
 export async function setup(root, flags = {}, dependencies = {}) {
-  const interactive = Boolean(process.stdin.isTTY && process.stderr.isTTY && !flags.yes);
-  let rl;
-  const ask = async question => {
-    if (!interactive) throw new Error(`${question} Supply explicit setup flags in a non-interactive terminal.`);
-    rl ||= createInterface({ input: process.stdin, output: process.stderr });
-    return (await rl.question(question + ' ')).trim();
-  };
-  const choose = async (question, items, label) => {
-    if (!items.length) throw new Error('No accessible choices. Check Workspace membership and subscription.');
-    console.error(items.map((x, i) => `${i + 1}. ${label(x)}`).join('\n'));
-    const n = Number(await ask(question));
-    if (!Number.isInteger(n) || n < 1 || n > items.length) throw new Error('Invalid selection. Run setup again.');
-    return items[n - 1];
-  };
+  const interactive = !flags.yes && Boolean(dependencies.prompts || (process.stdin.isTTY && process.stderr.isTTY));
+  const prompts = dependencies.prompts || createSetupPrompts();
+  const cloud = dependencies.cloud || withCloud;
   const runtime = join(root, '.mindmux/cli'); guardPath(root, runtime);
   mkdirSync(runtime, { recursive: true, mode: 0o700 });
   const lock = join(runtime, 'setup.lock');
@@ -108,8 +97,7 @@ export async function setup(root, flags = {}, dependencies = {}) {
     if (!agents.length) {
       if (!interactive) throw new Error('Specify --agent claude-code,codex in a non-interactive terminal.');
       const installed = supported.filter(name => { try { execFileSync('/usr/bin/which', [name === 'claude-code' ? 'claude' : name], { stdio: 'ignore' }); return true; } catch { return false; } });
-      const answer = await ask(`Which agents should be connected? Enter claude-code,codex (default: ${installed.join(',') || 'claude-code,codex'}):`);
-      agents = agentsFrom(answer || installed.join(',') || 'claude-code,codex');
+      agents = agentsFrom(await prompts.agents(installed));
     }
     if (flags.local && (flags['brain-id'] || flags.name || flags['workspace-id'] || flags.server)) throw new Error('--local cannot be combined with Cloud selection flags.');
     if (flags['brain-id'] && (flags.name || flags['workspace-id'])) throw new Error('Choose --brain-id or Workspace/project creation flags.');
@@ -120,7 +108,7 @@ export async function setup(root, flags = {}, dependencies = {}) {
     try { plans = preflight(root, agents, manifest, migrate); }
     catch (error) {
       if (!interactive || migrate || !error.message.includes('--migrate')) throw error;
-      migrate = (await ask(`${error.message}\nReplace and back up the existing MCP configuration? [y/N]`)).toLowerCase() === 'y';
+      migrate = await prompts.confirm(`${error.message}\nReplace and back up the existing MCP configuration?`);
       if (!migrate) throw error;
       plans = preflight(root, agents, manifest, migrate);
     }
@@ -142,7 +130,7 @@ export async function setup(root, flags = {}, dependencies = {}) {
       const intent = { server, workspaceId, name, state: 'requesting' };
       writeJson(pendingPath, intent);
       let result;
-      try { result = await withCloud(server, call => call('create_project', { workspaceId, name, description })); }
+      try { result = await cloud(server, call => call('create_project', { workspaceId, name, description })); }
       catch (error) { throw new Error(`${error.message} Project creation outcome may be unknown. Inspect project list before retrying. Journal: ${pendingPath}`); }
       created = { ...intent, state: 'created', brainId: result.brainId };
       if (!created.brainId) throw new Error('Project creation returned no brainId. Inspect project list before retrying.');
@@ -152,41 +140,43 @@ export async function setup(root, flags = {}, dependencies = {}) {
     if (!flags.local) {
       if (!readJson(credentialPath(server), {}).tokens) await (dependencies.login || login)(server, { open: !flags['no-open'] });
       // Authenticate/refresh through a harmless real request. Do not start browser auth after arbitrary network errors.
-      try { await withCloud(server, call => call.listTools()); }
+      try { await cloud(server, call => call.listTools()); }
       catch (error) {
         if (error instanceof UnauthorizedError || ['InvalidGrantError', 'InvalidTokenError'].includes(error.name) || error.message.startsWith('Cloud login required.')) {
           await (dependencies.login || login)(server, { open: !flags['no-open'] });
-          await withCloud(server, call => call.listTools());
+          await cloud(server, call => call.listTools());
         } else throw error;
       }
       if (flags['brain-id']) selected = { brainId: flags['brain-id'] };
       else if (flags.name) {
         if (!flags['workspace-id']) throw new Error('--workspace-id is required with --name.');
-        if (!flags.confirm && !(interactive && (await ask(`Create Project ${flags.name}? All Workspace members can access it. [y/N]`)).toLowerCase() === 'y')) throw new Error('Project creation requires --confirm.');
+        if (!flags.confirm && !(interactive && await prompts.confirm(`Create Project ${flags.name}? All Workspace members can access it.`))) throw new Error('Project creation requires --confirm.');
         selected = await createOrReuse(flags['workspace-id'], flags.name, flags.description || '');
       } else if (current.kind === 'cloud' && current.server === server && !flags['workspace-id']) selected = current;
       else {
         if (!interactive) throw new Error('Select --brain-id, or --workspace-id plus --name --confirm; no Brain is inferred from directory names.');
-        const workspaces = (await withCloud(server, call => call('list_workspaces'))).workspaces;
-        const workspace = flags['workspace-id'] ? workspaces.find(w => (w.id || w.workspaceId) === flags['workspace-id']) : await choose('Select a Workspace number:', workspaces, w => w.name);
+        const workspaces = (await cloud(server, call => call('list_workspaces'))).workspaces;
+        if (!workspaces.length) throw new Error('No accessible Workspaces. Check Workspace membership and subscription.');
+        const workspace = flags['workspace-id'] ? workspaces.find(w => (w.id || w.workspaceId) === flags['workspace-id']) : await prompts.choose('Select a Workspace:', workspaces.map(w => ({ name: w.name, value: w })));
         if (!workspace) throw new Error('Workspace is unavailable.');
         const workspaceId = workspace.id || workspace.workspaceId;
-        const projects = (await withCloud(server, call => call('list_projects', { workspaceId }))).projects;
-        console.error(projects.map((p, i) => `${i + 1}. ${p.name}`).join('\n'));
-        const answer = await ask('Select a Project number, or enter new to create a Project:');
-        if (answer.toLowerCase() === 'new') {
-          const name = await ask('New Project name:');
-          if (!name) throw new Error('Project name is required.');
-          if ((await ask(`Create ${name}? All Workspace members can access it. [y/N]`)).toLowerCase() !== 'y') throw new Error('Creation cancelled.');
-          selected = await createOrReuse(workspaceId, name);
-        } else {
-          const n = Number(answer);
-          if (!Number.isInteger(n) || n < 1 || n > projects.length) throw new Error('Invalid project selection.');
-          selected = projects[n - 1];
+        const projects = (await cloud(server, call => call('list_projects', { workspaceId }))).projects;
+        while (!selected) {
+          const choice = await prompts.choose('Select a Project or create a new one:', [
+            { name: '+ Create a new Project', value: { kind: 'create' } },
+            ...projects.map(project => ({ name: project.name, value: { kind: 'existing', project } })),
+          ]);
+          if (choice.kind === 'existing') selected = choice.project;
+          else {
+            const name = await prompts.projectName(projects);
+            if (await prompts.confirm(`Create Project "${name}"? All Workspace members can access it.`)) {
+              selected = await createOrReuse(workspaceId, name);
+            }
+          }
         }
       }
       if (!selected?.brainId) throw new Error('Selected Project has no Cloud Brain.');
-      const resolved = await withCloud(server, call => call('resolve_brain', { brainId: selected.brainId }));
+      const resolved = await cloud(server, call => call('resolve_brain', { brainId: selected.brainId }));
       if (resolved.status !== 'resolved') throw new Error('Selected Cloud Brain is inaccessible. Project binding was not changed.');
       selected = { brainId: selected.brainId, name: resolved.brain?.name || selected.name || selected.brainId };
     }
@@ -216,8 +206,11 @@ export async function setup(root, flags = {}, dependencies = {}) {
       return { installed: true, project: root, binding: binding(root), agents, mcp: probe, warnings: legacyWarnings(root),
         next: 'Restart the selected Agent in this project and approve its MCP/project/hook trust prompts. Codex uses AGENTS.md instructions, not native hooks.' };
     });
+  } catch (error) {
+    if (error.name === 'ExitPromptError') throw new Error('Setup cancelled.');
+    throw error;
   } finally {
-    rl?.close(); process.removeListener('exit', cleanup);
+    process.removeListener('exit', cleanup);
     process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', terminate); cleanup();
   }
 }
