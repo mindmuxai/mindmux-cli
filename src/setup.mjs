@@ -215,14 +215,14 @@ export async function setup(root, flags = {}, dependencies = {}) {
   }
 }
 
-export async function removeSetup(root, flags = {}) {
+export async function removeSetup(root, flags = {}, { lockHeld = false } = {}) {
   const manifest = readJson(setupPath(root), {});
   const agents = agentsFrom(flags.agent || Object.keys(manifest.agents || {}).join(','));
   if (!agents.length) return { removed: [], note: 'No setup-managed integrations. Existing connect-only integrations can be removed with disconnect.' };
   const runtime = join(root, '.mindmux/cli'); guardPath(root, runtime); mkdirSync(runtime, { recursive: true });
   const lock = join(runtime, 'setup.lock');
-  try { mkdirSync(lock); } catch { throw new Error(`Another setup/remove is active: ${lock}`); }
-  const cleanup = () => rmSync(lock, { recursive: true, force: true });
+  try { if (!lockHeld) mkdirSync(lock); } catch { throw new Error(`Another setup/remove is active: ${lock}`); }
+  const cleanup = () => { if (!lockHeld) rmSync(lock, { recursive: true, force: true }); };
   const interrupt = () => process.exit(130), terminate = () => process.exit(143);
   process.on('SIGINT', interrupt); process.on('SIGTERM', terminate); process.once('exit', cleanup);
   try {

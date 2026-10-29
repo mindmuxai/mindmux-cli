@@ -14,6 +14,7 @@ Setup:
   mmx setup [--agent claude-code,codex]      login, choose Brain, install MCP + rules/hooks
   mmx setup --local --agent codex --yes     local Brain without Cloud login
   mmx setup --json                         return detailed setup results as JSON
+  mmx clean [--keep-login] [--yes]           reset local setup and data; keep Cloud data
   mmx remove [--agent NAME]                 remove setup entries; keep data and login
   mmx init --local                          initialize/reuse a local Brain
   mmx login [--server URL] [--no-open]       OAuth PKCE browser login
@@ -67,7 +68,7 @@ function cloudVersion(value) {
 
 export async function main(argv = process.argv.slice(2)) {
   const options = Object.fromEntries(['project', 'agent', 'brain-id', 'server', 'workspace-id', 'name', 'description', 'id', 'title', 'category', 'status', 'source', 'expected-version', 'summary', 'kind', 'args'].map(key => [key, { type: 'string' }]));
-  for (const key of ['local', 'online', 'no-open', 'confirm', 'help', 'version', 'yes', 'migrate', 'json']) options[key] = { type: 'boolean' };
+  for (const key of ['local', 'online', 'no-open', 'confirm', 'help', 'version', 'yes', 'migrate', 'json', 'keep-login', 'include-external-data']) options[key] = { type: 'boolean' };
   const { values: flags, positionals: pos } = parseArgs({ args: argv, options, allowPositionals: true, strict: true });
   if (flags.version) { console.log('0.1.0'); return; }
   if (!pos.length || flags.help || pos[0] === 'help') { console.log(HELP); return; }
@@ -78,6 +79,14 @@ export async function main(argv = process.argv.slice(2)) {
     if (flags[key] && /[\r\n\0]/.test(flags[key])) throw new Error(`--${key} must be a single line without NUL characters.`);
   }
   const selectedServer = () => serverUrl(flags.server || preferences(root).mindmuxCli?.server || readJson(join(homeDir(), 'config.json'), {}).server || DEFAULT_SERVER);
+  if (command === 'clean') {
+    const { clean } = await import('./clean.mjs');
+    const result = await clean(root, flags);
+    if (flags.json) output(result);
+    else if (result.cancelled) console.log('Cleanup cancelled.');
+    else console.log(`\n✓ Local MindMux setup has been reset.${result.signedOut ? ' You are signed out of the CLI.' : ''}\nCloud Projects and Brains are kept.\n\nRun mmx setup to start again.`);
+    return;
+  }
   if (command === 'setup' || command === 'remove') {
     const { setup, removeSetup } = await import('./setup.mjs');
     const result = await (command === 'setup' ? setup(root, flags) : removeSetup(root, flags));
