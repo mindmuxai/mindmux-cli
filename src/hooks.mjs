@@ -1,0 +1,66 @@
+import { createHash } from 'node:crypto';
+import { join } from 'node:path';
+import { binding, readJson, writeJson } from './storage.mjs';
+import { withBrain } from './brain.mjs';
+import { recall } from './recall.mjs';
+
+const digest = text => createHash('sha256').update(text).digest('hex');
+export const targetKey = root => digest(JSON.stringify(binding(root)));
+const statePath = (root, agent, input) => join(root, '.mindmux/cli/sessions', `${agent}-${digest(String(input.session_id || input.conversation_id || 'default'))}.json`);
+export function recordHook(root, agent, event, values) {
+  writeJson(join(root, `.mindmux/cli/last-${agent}-${event}.json`), { time: new Date().toISOString(), agent, event, ...values });
+}
+const unboundContext = 'MindMux: this project has no selected Brain. Ask the user to choose an existing Cloud Brain, create a Project in an explicitly selected Workspace, or use mmx init --local. Do not infer a Brain from the folder name.';
+
+export async function handleHook(root, agent, event, input) {
+  if (!['cursor', 'claude-code'].includes(agent)) throw new Error('Hooks currently support cursor and claude-code.');
+  if (!['session-start', 'prompt', 'pre-tool', 'stop'].includes(event)) throw new Error('Unknown hook event.');
+  const path = statePath(root, agent, input);
+  let state = readJson(path, {});
+  const key = targetKey(root);
+  if (state.targetKey !== key) state = { targetKey: key };
+  const outputContext = (context, hookEventName) => agent === 'cursor' ? { additional_context: context }
+    : { hookSpecificOutput: { hookEventName, additionalContext: context } };
+  if (event === 'stop') {
+    if (state.stopped || input.stop_hook_active || Number(input.loop_count || 0) > 0 || ['aborted', 'error'].includes(input.status)) return {};
+    state.stopped = true;
+    writeJson(path, state);
+    const reminder = 'MindMux memory check (once this turn): if this task settled a durable requirement, constraint or decision that has not already been captured, search/read the bound Brain and record it with its source. Do not store guesses or routine progress. If nothing qualifies, finish without writing. Do not repeat this check. Keep your final response focused on the user’s original request, in the user’s working language and requested format. Do not replace the answer with a memory-check report; if you already answered, preserve the substantive answer in the final response.';
+    recordHook(root, agent, event, { status: 'review-requested' });
+    return agent === 'cursor' ? { followup_message: reminder } : { decision: 'block', reason: reminder };
+  }
+  if (event === 'pre-tool') {
+    if (agent !== 'cursor' || !state.context || state.delivered) return {};
+    if (Date.now() - state.recalledAt > 10 * 60 * 1000) return {};
+    state.delivered = true;
+    writeJson(path, state);
+    recordHook(root, agent, event, { status: 'emitted', pageIds: state.pageIds || [], bytes: Buffer.byteLength(state.context),
+      note: 'Returned to host; model usage is not observable.' });
+    return outputContext(state.context);
+  }
+  // Invalidate previous-turn context before any retrieval that may fail.
+  writeJson(path, { targetKey: key, stopped: false });
+  const result = binding(root).kind === 'unbound' ? { context: unboundContext, pageIds: [] }
+    : await withBrain(root, brain => recall(brain, event === 'prompt' ? String(input.prompt || '').slice(0, 12000) : ''));
+  state = { targetKey: key, context: result.context, pageIds: result.pageIds, recalledAt: Date.now(), stopped: false,
+    delivered: agent === 'claude-code' || event === 'session-start' };
+  writeJson(path, state);
+  recordHook(root, agent, event, { status: state.delivered ? 'emitted' : 'retrieved', pageIds: result.pageIds,
+    bytes: Buffer.byteLength(result.context), note: state.delivered ? 'Returned to host; model usage is not observable.' : 'Awaiting Cursor preToolUse; tool-free turns receive startup context only.' });
+  if (agent === 'cursor' && event === 'prompt') return { continue: true };
+  return outputContext(result.context, event === 'session-start' ? 'SessionStart' : 'UserPromptSubmit');
+}
+
+export async function runHook(root, agent, event, input) {
+  // No failing hook should block a task. Bound the entire process as well as individual requests.
+  const timer = setTimeout(() => {
+    try { recordHook(root, agent, event, { status: 'timeout', error: 'Hook exceeded 8 seconds.' }); } catch {}
+    console.log(JSON.stringify(agent === 'cursor' && event === 'prompt' ? { continue: true } : {}));
+    process.exit(0);
+  }, 8000);
+  try { return await handleHook(root, agent, event, input); }
+  catch (error) {
+    try { recordHook(root, agent, event, { status: 'error', error: error.message.slice(0, 500) }); } catch {}
+    return agent === 'cursor' && event === 'prompt' ? { continue: true } : {};
+  } finally { clearTimeout(timer); }
+}

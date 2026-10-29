@@ -1,0 +1,40 @@
+{
+  "name": "@mindmux/cli",
+  "version": "0.1.0",
+  "description": "Brain operations and lifecycle integrations for coding agents",
+  "type": "module",
+  "bin": {
+    "mmx": "bin/mmx.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "demo": "node scripts/demo.mjs",
+    "check": "node --check bin/mmx.mjs && node --check bin/mindmux.mjs && npm test"
+  },
+  "dependencies": {
+    "@mindmux/brain-md": "0.4.1",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "smol-toml": "^1.9.1"
+  },
+  "devDependencies": {
+    "zod": "^4.2.0"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mindmuxai/mindmux-cli.git"
+  },
+  "homepage": "https://github.com/mindmuxai/mindmux-cli#readme",
+  "bugs": {
+    "url": "https://github.com/mindmuxai/mindmux-cli/issues"
+  }
+}

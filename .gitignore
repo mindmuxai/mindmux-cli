@@ -1,0 +1,28 @@
+# Dependencies and package archives
+node_modules/
+*.tgz
+
+# Generated demos, live test reports, coverage, and logs
+.demo/
+artifacts/
+coverage/
+*.log
+
+# Local configuration, credentials, and runtime state
+.env
+.env.*
+!.env.example
+.mindmux/
+.mindmux-cli/
+.mcp.json
+.codex/
+.claude/
+.cursor/
+
+# Operating system and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo

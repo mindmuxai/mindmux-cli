@@ -1,0 +1,220 @@
+import { parseArgs } from 'node:util';
+import { resolve, join } from 'node:path';
+import { existsSync, readdirSync, rmSync, realpathSync } from 'node:fs';
+import { binding, projectRoot, preferences, mergePreferences, ignoreRuntime, readJson, writeJson, homeDir, serverUrl, DEFAULT_SERVER } from './storage.mjs';
+import { localCommand, withBrain } from './brain.mjs';
+import { withCloud, login, credentialPath } from './cloud.mjs';
+import { connect, inspectIntegrations } from './integrations.mjs';
+import { runHook } from './hooks.mjs';
+import { recall } from './recall.mjs';
+
+const HELP = `mmx — project Brain operations and agent integrations (v0.1.0)
+
+Setup:
+  mmx setup [--agent claude-code,codex]      login, choose Brain, install MCP + rules/hooks
+  mmx setup --local --agent codex --yes     local Brain without Cloud login
+  mmx remove [--agent NAME]                 remove setup entries; keep data and login
+  mmx init --local                          initialize/reuse a local Brain
+  mmx login [--server URL] [--no-open]       OAuth PKCE browser login
+  mmx logout [--server URL]                 remove this CLI's saved credentials
+  mmx brain bind --brain-id ID [--server URL]
+  mmx brain bind --local                    explicitly choose the local Brain
+  mmx project create --workspace-id ID --name NAME --confirm
+  mmx connect --agent cursor|claude-code|codex
+  mmx disconnect --agent NAME               remove only owned integration entries
+  mmx doctor [--online]                     inspect binding/configuration/hook receipts
+
+Brain (JSON output, automatically uses the selected local/cloud Brain):
+  mmx brain status | list | roots
+  mmx brain read ID | read-root SLUG
+  mmx brain search QUERY | recall QUERY
+  cat decision.md | mmx brain create --id ID --title TITLE --category decision [--status draft] [--source TEXT]
+  cat decision.md | mmx brain update ID --expected-version VERSION --summary WHY [--source TEXT]
+  mmx brain append ID --kind evidence --summary TEXT [--source TEXT]
+  mmx brain archive ID
+  cat root.md | mmx brain update-root SLUG --expected-version VERSION
+    New local/cloud root: --expected-version new. Existing roots require their current version.
+
+Cloud discovery and low-level access:
+  mmx mcp serve                             stdio MCP sharing CLI authentication
+  mmx workspace list | project list | brain discover
+  mmx mcp tools
+  mmx mcp call TOOL --args '{"key":"value"}'
+    Low-level calls use your credentials and explicit arguments; they do not choose a Brain.
+
+All commands accept --project PATH. No automatic cloud-to-local fallback.
+Cursor: startup context + prompt retrieval delivered at first tool call; one stop review.
+Claude Code: startup + prompt context; one stop review. Codex: instructions only in v0.1.
+`;
+
+async function stdin(limit = 1024 * 1024) {
+  if (process.stdin.isTTY) throw new Error('Pipe content through stdin.');
+  let value = '';
+  for await (const chunk of process.stdin) {
+    value += chunk;
+    if (Buffer.byteLength(value) > limit) throw new Error('stdin exceeds 1 MiB.');
+  }
+  return value;
+}
+const output = value => console.log(JSON.stringify(value, null, 2));
+const need = (value, name) => { if (typeof value !== 'string' || !value.trim()) throw new Error(`${name} is required.`); return value; };
+const body = async () => need((await stdin()).trim(), 'Nonempty stdin');
+function cloudVersion(value) {
+  if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) throw new Error('--expected-version must be a positive integer for Cloud updates.');
+  return Number(value);
+}
+
+export async function main(argv = process.argv.slice(2)) {
+  const options = Object.fromEntries(['project', 'agent', 'brain-id', 'server', 'workspace-id', 'name', 'description', 'id', 'title', 'category', 'status', 'source', 'expected-version', 'summary', 'kind', 'args'].map(key => [key, { type: 'string' }]));
+  for (const key of ['local', 'online', 'no-open', 'confirm', 'help', 'version', 'yes', 'migrate']) options[key] = { type: 'boolean' };
+  const { values: flags, positionals: pos } = parseArgs({ args: argv, options, allowPositionals: true, strict: true });
+  if (flags.version) { console.log('0.1.0'); return; }
+  if (!pos.length || flags.help || pos[0] === 'help') { console.log(HELP); return; }
+  const root = realpathSync(flags.project ? resolve(flags.project) : projectRoot());
+  process.chdir(root);
+  const [command, action, ...rest] = pos;
+  for (const key of ['title', 'summary', 'source']) {
+    if (flags[key] && /[\r\n\0]/.test(flags[key])) throw new Error(`--${key} must be a single line without NUL characters.`);
+  }
+  const selectedServer = () => serverUrl(flags.server || preferences(root).mindmuxCli?.server || readJson(join(homeDir(), 'config.json'), {}).server || DEFAULT_SERVER);
+  if (command === 'setup' || command === 'remove') {
+    const { setup, removeSetup } = await import('./setup.mjs');
+    output(await (command === 'setup' ? setup(root, flags) : removeSetup(root, flags))); return;
+  }
+  if (command === 'mcp' && action === 'serve') {
+    const { serveMcp } = await import('./mcp-server.mjs');
+    await serveMcp(root); return;
+  }
+  if (command === 'hook') {
+    let input;
+    try { input = JSON.parse((await stdin()) || '{}'); }
+    catch { output({}); return; }
+    output(await runHook(root, flags.agent, action, input)); return;
+  }
+  if (command === 'login') {
+    const server = selectedServer();
+    await login(server, { open: !flags['no-open'] });
+    writeJson(join(homeDir(), 'config.json'), { server }); return;
+  }
+  if (command === 'logout') {
+    rmSync(credentialPath(selectedServer()), { force: true });
+    output({ signedOut: true, note: 'Removed this CLI’s local credentials. This does not revoke other clients or server grants.' }); return;
+  }
+  if (command === 'init') {
+    if (!flags.local) throw new Error('Choose --local explicitly, or run brain bind --brain-id <id> for Cloud.');
+    localCommand(root, ['init', '--no-wire']);
+    mergePreferences(root, { cloudBrain: { ...preferences(root).cloudBrain, enabled: false } });
+    ignoreRuntime(root);
+    output({ initialized: true, binding: binding(root), next: 'mmx connect --agent cursor' }); return;
+  }
+  if (command === 'connect' || command === 'disconnect') {
+    output(connect(root, need(flags.agent, '--agent'), { remove: command === 'disconnect' })); return;
+  }
+  if (command === 'doctor') {
+    const { inspectMcp } = await import('./host-config.mjs');
+    const { legacyWarnings } = await import('./setup.mjs');
+    const target = binding(root);
+    const integrations = inspectIntegrations(root);
+    const runtime = join(root, '.mindmux/cli');
+    const receipts = existsSync(runtime) ? readdirSync(runtime).filter(name => /^last-.*\.json$/.test(name)).map(name => readJson(join(runtime, name), {})) : [];
+    const report = { project: root, node: process.version, binding: target,
+      credentialsPresent: target.kind === 'cloud' ? Boolean(readJson(credentialPath(target.server), {}).tokens) : undefined,
+      integrations, mcp: inspectMcp(root), receipts, warnings: [
+        ...legacyWarnings(root),
+        ...(target.kind === 'unbound' ? ['No Brain selected. Initialize local or bind Cloud.'] : []),
+        ...integrations.filter(item => item.existingBrainMdHook).map(item => `${item.agent}: existing brain.md startup hook also runs; inspect for duplicate/local context.`),
+        ...integrations.filter(item => item.mode === 'instructions').map(item => `${item.agent}: instructions only, no automatic lifecycle execution.`),
+        ...(!receipts.length ? ['No hook receipts yet. Configuration does not prove host execution or model usage.'] : []),
+      ] };
+    for (const item of report.mcp) if (!item.configured || !item.executablePresent) {
+      report.warnings.push(`${item.agent}: setup-managed MCP configuration or launcher is missing/changed.`);
+      process.exitCode = 1;
+    }
+    if (flags.online) {
+      try { report.live = await withBrain(root, async brain => ({ accessible: true, activePages: (await brain.list()).length })); }
+      catch (error) { report.live = { accessible: false, error: error.message }; process.exitCode = 1; }
+      if (report.mcp.length && report.live.accessible) {
+        try { const { probeMcp } = await import('./mcp-server.mjs'); report.mcpProbe = await probeMcp(root); }
+        catch (error) { report.mcpProbe = { connected: false, error: error.message }; process.exitCode = 1; }
+      }
+    }
+    output(report); return;
+  }
+  if ((command === 'workspace' && action === 'list') || (command === 'project' && action === 'list') || (command === 'brain' && action === 'discover')) {
+    const tool = command === 'workspace' ? 'list_workspaces' : command === 'project' ? 'list_projects' : 'list_brains';
+    output(await withCloud(selectedServer(), call => call(tool, flags['workspace-id'] ? { workspaceId: flags['workspace-id'] } : {}))); return;
+  }
+  if (command === 'project' && action === 'create') {
+    const workspaceId = need(flags['workspace-id'], '--workspace-id'), name = need(flags.name, '--name');
+    if (!flags.confirm) throw new Error('New projects are visible to all Workspace members. Pass --confirm after selecting this Workspace and Project name.');
+    output(await withCloud(selectedServer(), call => call('create_project', { workspaceId, name, description: flags.description || '' }))); return;
+  }
+  if (command === 'mcp') {
+    if (action === 'call') {
+      const args = JSON.parse(flags.args || '{}');
+      if (!args || Array.isArray(args) || typeof args !== 'object') throw new Error('--args must be a JSON object.');
+      output(await withCloud(selectedServer(), call => call(need(rest[0], 'tool name'), args))); return;
+    }
+    if (action === 'tools') {
+      const { listCloudTools } = await import('./cloud.mjs');
+      output(await listCloudTools(selectedServer())); return;
+    }
+  }
+  if (command === 'brain' && action === 'bind') {
+    if (flags.local && flags['brain-id']) throw new Error('Choose --local or --brain-id, not both.');
+    const prefs = preferences(root);
+    if (flags.local) {
+      localCommand(root, ['brain-dir']);
+      mergePreferences(root, { cloudBrain: { ...prefs.cloudBrain, enabled: false } });
+    } else {
+      const brainId = need(flags['brain-id'], '--brain-id'), server = selectedServer();
+      const result = await withCloud(server, call => call('resolve_brain', { brainId }));
+      if (result.status !== 'resolved') throw new Error('Cloud Brain unavailable; binding was not changed.');
+      mergePreferences(root, { cloudBrain: { enabled: true, brainId, name: result.brain?.name || brainId }, mindmuxCli: { ...prefs.mindmuxCli, server } });
+    }
+    ignoreRuntime(root); output(binding(root)); return;
+  }
+  if (command === 'brain' && action === 'status') { output(binding(root)); return; }
+  if (command === 'brain') {
+    // Validate operation before opening a cloud connection.
+    if (!['list', 'roots', 'read', 'read-root', 'search', 'recall', 'create', 'update', 'append', 'archive', 'update-root'].includes(action)) throw new Error('Unknown brain command. Run mmx help.');
+    let content;
+    if (['create', 'update', 'update-root'].includes(action)) content = await body();
+    const result = await withBrain(root, async brain => {
+      switch (action) {
+        case 'list': return { pages: (await brain.list()).map(({ raw, compiledTruth, ...page }) => page) };
+        case 'roots': return { rootPages: await brain.roots() };
+        case 'read': return brain.read(need(rest[0], 'page id'));
+        case 'read-root': return brain.readRoot(need(rest[0], 'root slug'));
+        case 'search': return { pages: await brain.search(need(rest.join(' '), 'query')) };
+        case 'recall': return recall(brain, rest.join(' '));
+        case 'create': {
+          const id = need(flags.id, '--id'), title = need(flags.title, '--title'), category = need(flags.category, '--category');
+          if (!/^[a-z0-9][a-z0-9-]*$/.test(id) || /[\r\n]/.test(title)) throw new Error('Invalid page id or multiline title.');
+          if (!['project', 'concept', 'decision', 'person', 'reference'].includes(category)) throw new Error('Invalid page category.');
+          if (flags.status && !['active', 'draft', 'archived'].includes(flags.status)) throw new Error('Invalid page status.');
+          return brain.create({ id, title, category, status: flags.status || 'active', compiledTruth: content, creationSummary: flags.source || 'Captured through MindMux CLI' });
+        }
+        case 'update': {
+          const expected = need(flags['expected-version'], '--expected-version');
+          return brain.update({ id: need(rest[0], 'page id'), compiledTruth: content,
+            expectedVersion: brain.target.kind === 'cloud' ? cloudVersion(expected) : expected,
+            timelineEntry: { kind: 'decision', summary: need(flags.summary, '--summary'), source: flags.source || 'MindMux CLI' } });
+        }
+        case 'append': {
+          const kind = flags.kind || 'evidence';
+          if (!['decision', 'evidence', 'reversal', 'note'].includes(kind)) throw new Error('Invalid timeline kind.');
+          return brain.append({ id: need(rest[0], 'page id'), entry: { kind, summary: need(flags.summary, '--summary'), source: flags.source || 'MindMux CLI' } });
+        }
+        case 'archive': return brain.archive(need(rest[0], 'page id'));
+        case 'update-root': {
+          const expected = need(flags['expected-version'], '--expected-version');
+          return brain.updateRoot({ slug: need(rest[0], 'root slug'), body: content,
+            expectedVersion: brain.target.kind === 'cloud' && expected !== 'new' ? cloudVersion(expected) : expected });
+        }
+      }
+    });
+    output(result); return;
+  }
+  throw new Error('Unknown command. Run mmx help.');
+}
