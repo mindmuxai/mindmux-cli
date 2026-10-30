@@ -10,7 +10,10 @@ import { once } from 'node:events';
 import { parse } from 'smol-toml';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { setup } from '../src/setup.mjs';
+import { setup, switchBrain } from '../src/setup.mjs';
+import { binding, writeJson } from '../src/storage.mjs';
+import { credentialPath } from '../src/cloud.mjs';
+import { status, formatStatus } from '../src/status.mjs';
 
 const bin = fileURLToPath(new URL('../bin/mmx.mjs', import.meta.url));
 function fixture(t) {
@@ -241,16 +244,113 @@ test('setup defaults to a concise success message and supports explicit JSON out
   const options = { env: { ...process.env, MINDMUX_HOME: f.home, CODEX_HOME: f.codexHome }, timeout: 45000 };
   const human = await run(process.execPath, args, options);
   assert.match(human.stdout, /MindMux is ready/);
+  assert.match(human.stderr, /Installing project integrations/);
+  assert.match(human.stderr, /Checking MCP launch and Brain recall/);
   assert.match(human.stdout, /Project: project/);
-  assert.match(human.stdout, /Connected to: Claude Code and Codex/);
+  assert.match(human.stdout, /Configured for: Claude Code and Codex/);
   assert.match(human.stdout, /Restart Claude Code and Codex/);
   assert.doesNotMatch(human.stdout, /brainId|toolCount|backup|installed|instructions|native hooks/);
   assert.equal(human.stdout.includes(f.root), false);
   assert.throws(() => JSON.parse(human.stdout));
   const machine = await run(process.execPath, [...args, '--json'], options);
+  assert.doesNotMatch(machine.stderr, /Installing project integrations|Checking MCP launch/);
   const report = JSON.parse(machine.stdout);
   assert.equal(report.installed, true);
   assert.equal(report.mcp.recall, true);
   assert.deepEqual(report.agents, ['claude-code', 'codex']);
   assert.ok(existsSync(report.backup));
+});
+
+
+test('switch uses menus with existing agents, keeps login and data, and restores binding on probe failure', async t => {
+  const f = fixture(t); const flow = interactiveFixture(t, f, [{ name: 'Next Project', brainId: 'next-brain' }]);
+  await setup(f.root, { local: true, agent: 'codex', yes: true, json: true }, flow);
+  const credential = credentialPath('https://mcp.mindmux.ai/mcp');
+  writeJson(credential, { tokens: { access_token: 'test-token' } });
+  const savedLogin = readFileSync(credential, 'utf8');
+  const dataPath = join(f.root, 'brain/index.md'); const savedData = readFileSync(dataPath, 'utf8');
+  const prompts = { agents: async () => { throw new Error('Should reuse agents'); },
+    choose: async (message, choices) => choices[message.includes('Workspace') ? 0 : 1].value };
+  const login = async () => { throw new Error('Should reuse login'); };
+  const result = await switchBrain(f.root, { json: true }, { ...flow, prompts, login });
+  assert.equal(result.binding.brainId, 'next-brain');
+  assert.deepEqual(result.agents, ['codex']);
+  assert.equal((await status(f.root)).workspace, 'Test Workspace');
+  const oldPrefs = readFileSync(join(f.root, '.mindmux/preferences.json'), 'utf8');
+  const oldConfig = readFileSync(join(f.root, '.codex/config.toml'), 'utf8');
+  await assert.rejects(switchBrain(f.root, { 'brain-id': 'failing-brain', yes: true, json: true }, {
+    ...flow, login, probe: async () => { throw new Error('Probe unavailable'); },
+  }), /Project configuration restored/);
+  assert.equal(readFileSync(join(f.root, '.mindmux/preferences.json'), 'utf8'), oldPrefs);
+  assert.equal(readFileSync(join(f.root, '.codex/config.toml'), 'utf8'), oldConfig);
+  assert.equal(readFileSync(credential, 'utf8'), savedLogin);
+  assert.equal(readFileSync(dataPath, 'utf8'), savedData);
+  const cancel = { choose: async () => { const error = new Error('cancel'); error.name = 'ExitPromptError'; throw error; } };
+  await assert.rejects(switchBrain(f.root, { json: true }, { ...flow, login, prompts: cancel }), /Setup cancelled/);
+  assert.equal(readFileSync(join(f.root, '.mindmux/preferences.json'), 'utf8'), oldPrefs);
+  assert.equal(flow.calls.some(c => c.name === 'create_project'), false);
+  assert.equal(binding(f.root).brainId, 'next-brain');
+});
+
+test('created Project recovery keeps its ID and resumes without replaying the creation', async t => {
+  const f = fixture(t); const flow = interactiveFixture(t, f);
+  const flags = { agent: 'codex', 'workspace-id': 'test-workspace', name: 'New Project', confirm: true, yes: true, json: true };
+  await assert.rejects(setup(f.root, flags, { ...flow, probe: async () => { throw new Error('offline'); } }), error => {
+    assert.match(error.message, /Cloud Project was created and retained/);
+    assert.match(error.message, /--brain-id 'created-brain'/);
+    assert.match(error.message, /--server 'https:\/\/mcp.mindmux.ai\/mcp'/);
+    return true;
+  });
+  assert.equal(binding(f.root).kind, 'unbound');
+  assert.equal(existsSync(join(f.root, '.mindmux/cli/setup-pending.json')), true);
+  await setup(f.root, flags, flow);
+  assert.equal(flow.calls.filter(c => c.name === 'create_project').length, 1);
+  assert.equal(existsSync(join(f.root, '.mindmux/cli/setup-pending.json')), false);
+});
+
+test('status reports configuration separately from client calls and excludes probes and stale receipts', async t => {
+  const f = fixture(t);
+  const run = promisify(execFile);
+  const options = { env: { ...process.env, MINDMUX_HOME: f.home, CODEX_HOME: f.codexHome }, timeout: 45000 };
+  const args = [bin, '--project', f.root];
+  const empty = await run(process.execPath, [...args, 'status'], options);
+  assert.match(empty.stdout, /Not selected/);
+  await cli(f, ['setup', '--local', '--agent', 'codex', '--yes']);
+  let report = JSON.parse((await run(process.execPath, [...args, 'status', '--online', '--json'], options)).stdout);
+  assert.equal(report.live.accessible, true);
+  assert.equal(report.mcpProbe.recall, true);
+  assert.equal(report.receipts.length, 0);
+  assert.match(formatStatus(report), /Codex: Configured/);
+  const client = await clientFor(t, f);
+  await tool(client, { operation: 'recall', query: 'sample' });
+  report = JSON.parse((await run(process.execPath, [...args, 'status', '--json'], options)).stdout);
+  assert.equal(report.receipts.length, 1);
+  assert.equal(report.receipts[0].client, 'setup-test');
+  assert.equal(report.receipts[0].operation, 'recall');
+  assert.equal(JSON.stringify(report.receipts).includes('sample'), false);
+  assert.match(formatStatus(report), /setup-test called mindmux_brain/);
+  // Errors do not replace successful usage evidence.
+  await tool(client, { operation: 'read', id: 'missing-page' });
+  const receiptPath = join(f.root, '.mindmux/cli/last-mcp-tool.json');
+  const receipt = JSON.parse(readFileSync(receiptPath));
+  assert.equal(receipt.operation, 'recall');
+  writeJson(receiptPath, { ...receipt, targetKey: 'old-binding' });
+  report = JSON.parse((await run(process.execPath, [...args, 'status', '--json'], options)).stdout);
+  assert.equal(report.receipts.length, 0);
+  writeJson(receiptPath, { ...receipt, time: '2000-01-01T00:00:00.000Z' });
+  report = JSON.parse((await run(process.execPath, [...args, 'status', '--json'], options)).stdout);
+  assert.equal(report.receipts.length, 0);
+});
+
+
+test('status distinguishes Brain access from MCP launch failures', async t => {
+  const f = fixture(t); const flow = interactiveFixture(t, f);
+  await setup(f.root, { local: true, agent: 'codex', yes: true, json: true }, flow);
+  const report = await status(f.root, { online: true }, {
+    withBrain: async (_root, run) => run({ list: async () => [] }),
+    probe: async () => { throw new Error('launcher failed'); },
+  });
+  assert.equal(report.live.accessible, true);
+  assert.equal(report.mcpProbe.connected, false);
+  assert.match(formatStatus(report), /MCP check: Failed: launcher failed/);
 });

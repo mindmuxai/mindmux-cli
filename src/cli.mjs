@@ -14,6 +14,8 @@ Setup:
   mmx setup [--agent claude-code,codex]      login, choose Brain, install MCP + rules/hooks
   mmx setup --local --agent codex --yes     local Brain without Cloud login
   mmx setup --json                         return detailed setup results as JSON
+  mmx status [--online] [--json]            show configuration and observed activity
+  mmx switch [--brain-id ID | --local]      choose another Brain; keep login and data
   mmx clean [--keep-login] [--yes]           reset local setup and data; keep Cloud data
   mmx remove [--agent NAME]                 remove setup entries; keep data and login
   mmx init --local                          initialize/reuse a local Brain
@@ -87,14 +89,14 @@ export async function main(argv = process.argv.slice(2)) {
     else console.log(`\n✓ Local MindMux setup has been reset.${result.signedOut ? ' You are signed out of the CLI.' : ''}\nCloud Projects and Brains are kept.\n\nRun mmx setup to start again.`);
     return;
   }
-  if (command === 'setup' || command === 'remove') {
-    const { setup, removeSetup } = await import('./setup.mjs');
-    const result = await (command === 'setup' ? setup(root, flags) : removeSetup(root, flags));
+  if (command === 'setup' || command === 'remove' || command === 'switch') {
+    const { setup, removeSetup, switchBrain } = await import('./setup.mjs');
+    const result = await (command === 'switch' ? switchBrain(root, flags) : command === 'setup' ? setup(root, flags) : removeSetup(root, flags));
     if (command === 'remove' || flags.json) output(result);
     else {
       const agents = result.agents.map(agent => ({ 'claude-code': 'Claude Code', codex: 'Codex' })[agent] || agent).join(' and ');
       const project = result.binding.kind === 'cloud' ? result.binding.name : basename(result.project);
-      console.log(`\n✓ MindMux is ready.\n\nProject: ${project}\nConnected to: ${agents}\n\nRestart ${agents} in this project and approve any trust prompts to get started.`);
+      console.log(`\n✓ MindMux is ready.\n\nProject: ${project}\nConfigured for: ${agents}\n\nRestart ${agents} in this project and approve any trust prompts to get started.`);
     }
     return;
   }
@@ -126,6 +128,13 @@ export async function main(argv = process.argv.slice(2)) {
   }
   if (command === 'connect' || command === 'disconnect') {
     output(connect(root, need(flags.agent, '--agent'), { remove: command === 'disconnect' })); return;
+  }
+  if (command === 'status') {
+    const { status, formatStatus } = await import('./status.mjs');
+    const report = await status(root, flags);
+    if (flags.json) output(report); else console.log(formatStatus(report));
+    if (report.live?.accessible === false || report.mcpProbe?.connected === false) process.exitCode = 1;
+    return;
   }
   if (command === 'doctor') {
     const { inspectMcp } = await import('./host-config.mjs');

@@ -34,7 +34,7 @@ Use the Up/Down arrow keys and Enter to select agents, Workspaces, Projects, and
 
 The wizard also handles browser login. It installs project-level MCP configuration and agent instructions/hooks, then performs a real stdio MCP handshake and a read-only recall check.
 
-Setup finishes with a short confirmation and instructions to restart your agent. For scripts or troubleshooting, use `mmx setup --json` to return the full structured result, including diagnostics and the backup path.
+Setup prints progress for login, discovery, validation, installation, and the MCP check. Progress goes to stderr and is suppressed with `--json`. Setup finishes with a short confirmation and instructions to restart your agent. For scripts or troubleshooting, use `mmx setup --json` to return the full structured result, including diagnostics and the backup path.
 
 Existing valid credentials and project bindings are reused. Repeating setup updates managed entries without registering duplicates. Browser authorization and the agent's own project, MCP, and hook trust prompts still require user interaction.
 
@@ -58,6 +58,25 @@ mmx remove --agent codex
 `--yes` disables terminal questions. It does not bypass OAuth, agent trust prompts, or the `--confirm` requirement for Project creation. Non-interactive Cloud setup requires explicit agents and either an existing Cloud binding, a Brain ID, or Project creation options. `--no-open` prints the authorization URL instead of opening a browser.
 
 Claude Code uses the `mindmux` entry in `.mcp.json`, plus `CLAUDE.md` and hooks. Codex uses `mindmux_cli` in `.codex/config.toml`, plus `AGENTS.md` instructions. These MCP identifiers remain unchanged by the executable rename. Generated MCP configuration contains executable paths and `MINDMUX_HOME`, rather than copied OAuth tokens. Restart the agent after setup and approve the applicable trust prompts.
+
+### Check status and switch Brains
+
+```bash
+mmx status                  # Local configuration and observed activity; no network calls.
+mmx status --online         # Also check Brain access and the configured MCP launcher.
+mmx status --json           # Structured details for scripts.
+mmx switch                  # Choose a Workspace and Project with arrow keys.
+mmx switch --brain-id <brain-id> --yes
+mmx switch --local --yes
+```
+
+`status` distinguishes saved credentials, agent configuration, live read-only checks, successful MCP client tool calls, and hook context delivery. Successful setup is described as **Configured for**, because it does not establish that the agent has connected. Codex uses project instructions, without native lifecycle hooks. Neither a tool call nor delivered context proves that the model used the knowledge in its answer.
+
+Usage receipts are bounded to the most recent successful MCP tool call and each hook event. They record timestamps, client/tool/operation names and a binding fingerprint, without tool arguments or results. Setup and status probes do not count as agent activity. Status ignores receipts from a different binding or before the latest successful setup; it cannot observe calls made directly to a separate remote MCP connection or CLI.
+
+`switch` requires an existing `setup` installation and reuses all setup-managed agents. It keeps login credentials and Brain data. The selected Brain must pass validation and the MCP recall check; failures restore the previous binding and project configuration. Ctrl+C at a selection prompt cancels without changing the binding. Restart the agent after switching so its MCP server uses the new Brain.
+
+If Cloud Project creation succeeds but a later setup step fails, the error provides a command with that Brain ID to resume installation. The Cloud Project is retained. A local creation journal prevents a known creation from being replayed. If a creation request loses its response, inspect `mmx project list` before trying again; writes are never automatically retried.
 
 ### Existing integrations and migration
 

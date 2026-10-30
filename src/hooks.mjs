@@ -8,7 +8,7 @@ const digest = text => createHash('sha256').update(text).digest('hex');
 export const targetKey = root => digest(JSON.stringify(binding(root)));
 const statePath = (root, agent, input) => join(root, '.mindmux/cli/sessions', `${agent}-${digest(String(input.session_id || input.conversation_id || 'default'))}.json`);
 export function recordHook(root, agent, event, values) {
-  writeJson(join(root, `.mindmux/cli/last-${agent}-${event}.json`), { time: new Date().toISOString(), agent, event, ...values });
+  writeJson(join(root, `.mindmux/cli/last-${agent}-${event}.json`), { time: new Date().toISOString(), targetKey: targetKey(root), agent, event, ...values });
 }
 const unboundContext = 'MindMux: this project has no selected Brain. Ask the user to choose an existing Cloud Brain, create a Project in an explicitly selected Workspace, or use mmx init --local. Do not infer a Brain from the folder name.';
 

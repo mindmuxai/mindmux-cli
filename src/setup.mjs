@@ -80,7 +80,20 @@ function preflight(root, agents, manifest, migrate, remove = false) {
     return { agent, plan: planHost(root, agent, manifest.agents?.[agent], { migrate, remove }) };
   });
 }
+export async function switchBrain(root, flags = {}, dependencies = {}) {
+  const agents = Object.keys(readJson(setupPath(root), {}).agents || {});
+  if (!agents.length) throw new Error('No setup-managed agents. Run mmx setup first.');
+  return setup(root, { ...flags, agent: agents.join(',') }, { ...dependencies, reselect: true });
+}
+
 export async function setup(root, flags = {}, dependencies = {}) {
+  let stage = 'checking project configuration';
+  let recovery;
+  let selectedAgents = flags.agent;
+  const step = (message) => {
+    stage = message;
+    if (!flags.json) process.stderr.write(`• ${message}…\n`);
+  };
   const interactive = !flags.yes && Boolean(dependencies.prompts || (process.stdin.isTTY && process.stderr.isTTY));
   const prompts = dependencies.prompts || createSetupPrompts();
   const cloud = dependencies.cloud || withCloud;
@@ -99,6 +112,7 @@ export async function setup(root, flags = {}, dependencies = {}) {
       const installed = supported.filter(name => { try { execFileSync('/usr/bin/which', [name === 'claude-code' ? 'claude' : name], { stdio: 'ignore' }); return true; } catch { return false; } });
       agents = agentsFrom(await prompts.agents(installed));
     }
+    selectedAgents = agents.join(',');
     if (flags.local && (flags['brain-id'] || flags.name || flags['workspace-id'] || flags.server)) throw new Error('--local cannot be combined with Cloud selection flags.');
     if (flags['brain-id'] && (flags.name || flags['workspace-id'])) throw new Error('Choose --brain-id or Workspace/project creation flags.');
     if (flags.name && !flags['workspace-id']) throw new Error('--workspace-id is required with --name.');
@@ -124,20 +138,23 @@ export async function setup(root, flags = {}, dependencies = {}) {
       const pending = readJson(pendingPath, {});
       if (match(pending)) {
         if (!pending.brainId) throw new Error('A prior project creation has an unknown outcome. Run mmx project list and select its --brain-id; do not blindly retry creation. Inspect ' + pendingPath);
-        created = pending; return pending;
+        created = pending; recovery = pending; return pending;
       }
       if (match(created)) return created;
       const intent = { server, workspaceId, name, state: 'requesting' };
       writeJson(pendingPath, intent);
       let result;
+      step('Creating Cloud Project');
       try { result = await cloud(server, call => call('create_project', { workspaceId, name, description })); }
       catch (error) { throw new Error(`${error.message} Project creation outcome may be unknown. Inspect project list before retrying. Journal: ${pendingPath}`); }
       created = { ...intent, state: 'created', brainId: result.brainId };
       if (!created.brainId) throw new Error('Project creation returned no brainId. Inspect project list before retrying.');
+      recovery = created;
       writeJson(pendingPath, created);
       return created;
     };
     if (!flags.local) {
+      step('Checking Cloud login');
       if (!readJson(credentialPath(server), {}).tokens) await (dependencies.login || login)(server, { open: !flags['no-open'] });
       // Authenticate/refresh through a harmless real request. Do not start browser auth after arbitrary network errors.
       try { await cloud(server, call => call.listTools()); }
@@ -152,36 +169,40 @@ export async function setup(root, flags = {}, dependencies = {}) {
         if (!flags['workspace-id']) throw new Error('--workspace-id is required with --name.');
         if (!flags.confirm && !(interactive && await prompts.confirm(`Create Project ${flags.name}? All Workspace members can access it.`))) throw new Error('Project creation requires --confirm.');
         selected = await createOrReuse(flags['workspace-id'], flags.name, flags.description || '');
-      } else if (current.kind === 'cloud' && current.server === server && !flags['workspace-id']) selected = current;
+      } else if (current.kind === 'cloud' && current.server === server && !flags['workspace-id'] && !dependencies.reselect) selected = { ...preferences(root).cloudBrain, ...current };
       else {
         if (!interactive) throw new Error('Select --brain-id, or --workspace-id plus --name --confirm; no Brain is inferred from directory names.');
+        step('Loading Workspaces');
         const workspaces = (await cloud(server, call => call('list_workspaces'))).workspaces;
         if (!workspaces.length) throw new Error('No accessible Workspaces. Check Workspace membership and subscription.');
         const workspace = flags['workspace-id'] ? workspaces.find(w => (w.id || w.workspaceId) === flags['workspace-id']) : await prompts.choose('Select a Workspace:', workspaces.map(w => ({ name: w.name, value: w })));
         if (!workspace) throw new Error('Workspace is unavailable.');
         const workspaceId = workspace.id || workspace.workspaceId;
+        step('Loading Projects');
         const projects = (await cloud(server, call => call('list_projects', { workspaceId }))).projects;
         while (!selected) {
           const choice = await prompts.choose('Select a Project or create a new one:', [
             { name: '+ Create a new Project', value: { kind: 'create' } },
             ...projects.map(project => ({ name: project.name, value: { kind: 'existing', project } })),
           ]);
-          if (choice.kind === 'existing') selected = choice.project;
+          if (choice.kind === 'existing') selected = { ...choice.project, workspaceId, workspaceName: workspace.name };
           else {
             const name = await prompts.projectName(projects);
             if (await prompts.confirm(`Create Project "${name}"? All Workspace members can access it.`)) {
-              selected = await createOrReuse(workspaceId, name);
+              selected = { ...await createOrReuse(workspaceId, name), workspaceName: workspace.name };
             }
           }
         }
       }
       if (!selected?.brainId) throw new Error('Selected Project has no Cloud Brain.');
+      step('Validating selected Brain');
       const resolved = await cloud(server, call => call('resolve_brain', { brainId: selected.brainId }));
       if (resolved.status !== 'resolved') throw new Error('Selected Cloud Brain is inaccessible. Project binding was not changed.');
-      selected = { brainId: selected.brainId, name: resolved.brain?.name || selected.name || selected.brainId };
+      selected = { brainId: selected.brainId, name: resolved.brain?.name || selected.name || selected.brainId, ...(selected.workspaceId ? { workspaceId: selected.workspaceId, workspaceName: selected.workspaceName } : {}) };
     }
     // Do not roll back over edits made during browser authorization or selection.
     for (const file of files) if ((existsSync(file.path) ? readFileSync(file.path, 'utf8') : null) !== file.content) throw new Error(`Configuration changed during setup: ${file.path}. Rerun setup.`);
+    step('Installing project integrations');
     return await transaction(root, files, async () => {
       if (flags.local) {
         // Local Brain data survives a configuration rollback and is never deleted by remove.
@@ -200,6 +221,7 @@ export async function setup(root, flags = {}, dependencies = {}) {
       const ignored = join(root, '.gitignore'); let text = readFileSync(ignored, 'utf8');
       for (const entry of ['/.mcp.json', '/.codex/config.toml']) if (!text.split(/\r?\n/).includes(entry)) text += `${text.endsWith('\n') ? '' : '\n'}${entry}\n`;
       writeAtomic(ignored, text);
+      step('Checking MCP launch and Brain recall');
       const probe = await (dependencies.probe || probeMcp)(root);
       const pending = readJson(pendingPath, {});
       if (pending.brainId && pending.brainId === selected?.brainId) rmSync(pendingPath, { force: true });
@@ -208,7 +230,11 @@ export async function setup(root, flags = {}, dependencies = {}) {
     });
   } catch (error) {
     if (error.name === 'ExitPromptError') throw new Error('Setup cancelled.');
-    throw error;
+    const quote = value => "'" + String(value).replaceAll("'", "'\"'\"'") + "'";
+    const retry = recovery?.brainId
+      ? `Cloud Project was created and retained. Resume without creating it again: mmx --project ${quote(root)} setup --brain-id ${quote(recovery.brainId)} --server ${quote(recovery.server)} --agent ${quote(selectedAgents)}`
+      : 'Check the error above, then rerun the command. If Project creation has an unknown outcome, list Projects before retrying creation.';
+    throw new Error(`${stage} failed: ${error.message}\n${retry}`);
   } finally {
     process.removeListener('exit', cleanup);
     process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', terminate); cleanup();

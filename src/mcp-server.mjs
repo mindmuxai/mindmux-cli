@@ -4,7 +4,9 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { execFile } from 'node:child_process';
-import { requireBinding } from './storage.mjs';
+import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { requireBinding, writeJson } from './storage.mjs';
 import { withCloud } from './cloud.mjs';
 import { CLI_BIN } from './integrations.mjs';
 
@@ -57,16 +59,26 @@ export async function serveMcp(root) {
       })] };
     });
   });
+  const record = (tool, operation) => {
+    const client = server.getClientVersion()?.name;
+    if (!client || client === 'mindmux-setup-check') return;
+    // Diagnostics must never turn a completed write into an apparent failure.
+    try { writeJson(join(root, '.mindmux/cli/last-mcp-tool.json'), {
+      time: new Date().toISOString(), targetKey: createHash('sha256').update(JSON.stringify(target)).digest('hex'),
+      event: 'tool-call', status: 'success', client, tool, ...(operation ? { operation } : {}),
+    }); } catch {}
+  };
   server.setRequestHandler(CallToolRequestSchema, async request => {
     try {
       ensureTarget();
       const { name, arguments: args = {} } = request.params;
       if (name === brainTool.name) {
         const result = await runBrainTool(root, args);
+        record(name, args.operation);
         return { content: [{ type: 'text', text: JSON.stringify(result) }] };
       }
       if (target.kind !== 'cloud') throw new Error('Unknown tool.');
-      return await withCloud(target.server, async call => {
+      const result = await withCloud(target.server, async call => {
         const tool = (await call.listTools()).tools.find(tool => tool.name === name);
         if (!tool) throw new Error('Unknown Cloud tool.');
         if (tool.inputSchema?.properties?.brainId) {
@@ -75,6 +87,8 @@ export async function serveMcp(root) {
         }
         return call.raw(name, args);
       });
+      if (!result.isError) record(name);
+      return result;
     } catch (error) { return { isError: true, content: [{ type: 'text', text: error.message }] }; }
   });
   await server.connect(new StdioServerTransport());
