@@ -1,10 +1,10 @@
 import { parseArgs } from 'node:util';
 import { resolve, join, basename } from 'node:path';
-import { existsSync, readdirSync, rmSync, realpathSync } from 'node:fs';
+import { existsSync, rmSync, realpathSync } from 'node:fs';
 import { binding, projectRoot, preferences, mergePreferences, ignoreRuntime, readJson, writeJson, homeDir, serverUrl, DEFAULT_SERVER } from './storage.mjs';
 import { localCommand, withBrain } from './brain.mjs';
 import { withCloud, login, credentialPath } from './cloud.mjs';
-import { connect, inspectIntegrations } from './integrations.mjs';
+import { connect } from './integrations.mjs';
 import { runHook } from './hooks.mjs';
 import { recall } from './recall.mjs';
 
@@ -26,7 +26,8 @@ Setup:
   mmx project create --workspace-id ID --name NAME --confirm
   mmx connect --agent cursor|claude-code|codex
   mmx disconnect --agent NAME               remove only owned integration entries
-  mmx doctor [--online]                     inspect binding/configuration/hook receipts
+  mmx doctor [--online] [--json]            diagnose configuration and connectivity
+  mmx doctor --fix [--yes]                  review and apply managed configuration repair
 
 Brain (JSON output, automatically uses the selected local/cloud Brain):
   mmx brain status | list | roots
@@ -46,6 +47,7 @@ Cloud discovery and low-level access:
   mmx mcp call TOOL --args '{"key":"value"}'
     Low-level calls use your credentials and explicit arguments; they do not choose a Brain.
 
+Run mmx without arguments in a terminal for the interactive menu.
 All commands accept --project PATH. No automatic cloud-to-local fallback.
 Cursor: startup context + prompt retrieval delivered at first tool call; one stop review.
 Claude Code: startup + prompt context; one stop review. Codex: instructions only in v0.1.
@@ -70,12 +72,20 @@ function cloudVersion(value) {
 
 export async function main(argv = process.argv.slice(2)) {
   const options = Object.fromEntries(['project', 'agent', 'brain-id', 'server', 'workspace-id', 'name', 'description', 'id', 'title', 'category', 'status', 'source', 'expected-version', 'summary', 'kind', 'args'].map(key => [key, { type: 'string' }]));
-  for (const key of ['local', 'online', 'no-open', 'confirm', 'help', 'version', 'yes', 'migrate', 'json', 'keep-login', 'include-external-data']) options[key] = { type: 'boolean' };
+  for (const key of ['local', 'online', 'no-open', 'confirm', 'help', 'version', 'yes', 'migrate', 'json', 'keep-login', 'include-external-data', 'fix']) options[key] = { type: 'boolean' };
   const { values: flags, positionals: pos } = parseArgs({ args: argv, options, allowPositionals: true, strict: true });
   if (flags.version) { console.log('0.1.0'); return; }
-  if (!pos.length || flags.help || pos[0] === 'help') { console.log(HELP); return; }
+  if (flags.help || pos[0] === 'help' || (!pos.length && (!process.stdin.isTTY || !process.stderr.isTTY || flags.json || flags.yes))) { console.log(HELP); return; }
   const root = realpathSync(flags.project ? resolve(flags.project) : projectRoot());
   process.chdir(root);
+  if (!pos.length) {
+    const { runMenu } = await import('./menu.mjs');
+    await runMenu(root, { run: async args => {
+      process.exitCode = 0;
+      await main(['--project', root, ...args]);
+    } });
+    return;
+  }
   const [command, action, ...rest] = pos;
   for (const key of ['title', 'summary', 'source']) {
     if (flags[key] && /[\r\n\0]/.test(flags[key])) throw new Error(`--${key} must be a single line without NUL characters.`);
@@ -92,7 +102,8 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === 'setup' || command === 'remove' || command === 'switch') {
     const { setup, removeSetup, switchBrain } = await import('./setup.mjs');
     const result = await (command === 'switch' ? switchBrain(root, flags) : command === 'setup' ? setup(root, flags) : removeSetup(root, flags));
-    if (command === 'remove' || flags.json) output(result);
+    if (flags.json) output(result);
+    else if (command === 'remove') console.log(result.removed.length ? `Removed connections for ${result.removed.join(', ')}. Brain data, binding and login are kept.` : result.note);
     else {
       const agents = result.agents.map(agent => ({ 'claude-code': 'Claude Code', codex: 'Codex' })[agent] || agent).join(' and ');
       const project = result.binding.kind === 'cloud' ? result.binding.name : basename(result.project);
@@ -137,34 +148,20 @@ export async function main(argv = process.argv.slice(2)) {
     return;
   }
   if (command === 'doctor') {
-    const { inspectMcp } = await import('./host-config.mjs');
-    const { legacyWarnings } = await import('./setup.mjs');
-    const target = binding(root);
-    const integrations = inspectIntegrations(root);
-    const runtime = join(root, '.mindmux/cli');
-    const receipts = existsSync(runtime) ? readdirSync(runtime).filter(name => /^last-.*\.json$/.test(name)).map(name => readJson(join(runtime, name), {})) : [];
-    const report = { project: root, node: process.version, binding: target,
-      credentialsPresent: target.kind === 'cloud' ? Boolean(readJson(credentialPath(target.server), {}).tokens) : undefined,
-      integrations, mcp: inspectMcp(root), receipts, warnings: [
-        ...legacyWarnings(root),
-        ...(target.kind === 'unbound' ? ['No Brain selected. Initialize local or bind Cloud.'] : []),
-        ...integrations.filter(item => item.existingBrainMdHook).map(item => `${item.agent}: existing brain.md startup hook also runs; inspect for duplicate/local context.`),
-        ...integrations.filter(item => item.mode === 'instructions').map(item => `${item.agent}: instructions only, no automatic lifecycle execution.`),
-        ...(!receipts.length ? ['No hook receipts yet. Configuration does not prove host execution or model usage.'] : []),
-      ] };
-    for (const item of report.mcp) if (!item.configured || !item.executablePresent) {
-      report.warnings.push(`${item.agent}: setup-managed MCP configuration or launcher is missing/changed.`);
-      process.exitCode = 1;
-    }
-    if (flags.online) {
-      try { report.live = await withBrain(root, async brain => ({ accessible: true, activePages: (await brain.list()).length })); }
-      catch (error) { report.live = { accessible: false, error: error.message }; process.exitCode = 1; }
-      if (report.mcp.length && report.live.accessible) {
-        try { const { probeMcp } = await import('./mcp-server.mjs'); report.mcpProbe = await probeMcp(root); }
-        catch (error) { report.mcpProbe = { connected: false, error: error.message }; process.exitCode = 1; }
+    const { doctor, formatDoctor } = await import('./doctor.mjs');
+    const report = await doctor(root, flags);
+    if (flags.json) output(report);
+    else {
+      console.log(formatDoctor(report));
+      if (report.repairResult) {
+        const result = report.repairResult;
+        console.log(result.applied ? '\n✓ Managed configuration repaired. Restart the configured agents.'
+          : result.cancelled ? '\nRepair cancelled. No changes were made.'
+          : `\n${result.error || result.reason}`);
       }
     }
-    output(report); return;
+    if (!report.healthy) process.exitCode = 1;
+    return;
   }
   if ((command === 'workspace' && action === 'list') || (command === 'project' && action === 'list') || (command === 'brain' && action === 'discover')) {
     const tool = command === 'workspace' ? 'list_workspaces' : command === 'project' ? 'list_projects' : 'list_brains';

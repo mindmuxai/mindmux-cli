@@ -12,6 +12,22 @@ Local operations reuse `@mindmux/brain-md`; Cloud operations use the official MC
 
 ## Install from source
 
+Use Node.js 22 or later. With pnpm:
+
+```bash
+git clone https://github.com/mindmuxai/mindmux-cli.git
+cd mindmux-cli
+pnpm install
+pnpm add -g "$PWD"
+
+cd /path/to/your/project
+mmx setup
+```
+
+If pnpm reports that its global bin directory is missing, run `pnpm setup`, reopen your terminal, and retry `pnpm add -g "$PWD"`. Source installation does not require a published `@mindmux/cli` package. Keep the source directory available for the installed command.
+
+With npm:
+
 ```bash
 git clone https://github.com/mindmuxai/mindmux-cli.git
 cd mindmux-cli
@@ -58,6 +74,26 @@ mmx remove --agent codex
 `--yes` disables terminal questions. It does not bypass OAuth, agent trust prompts, or the `--confirm` requirement for Project creation. Non-interactive Cloud setup requires explicit agents and either an existing Cloud binding, a Brain ID, or Project creation options. `--no-open` prints the authorization URL instead of opening a browser.
 
 Claude Code uses the `mindmux` entry in `.mcp.json`, plus `CLAUDE.md` and hooks. Codex uses `mindmux_cli` in `.codex/config.toml`, plus `AGENTS.md` instructions. These MCP identifiers remain unchanged by the executable rename. Generated MCP configuration contains executable paths and `MINDMUX_HOME`, rather than copied OAuth tokens. Restart the agent after setup and approve the applicable trust prompts.
+
+### Interactive menu
+
+Run `mmx` without arguments in a terminal to open the arrow-key menu. An unconfigured project offers setup first. Configured projects offer status, live connection checks, diagnosis and repair, Brain switching, and agent configuration. More options include removing selected agent connections and resetting local setup. Removal requires confirmation; local reset retains its own scope preview and confirmation. Actions return to the menu, and Ctrl+C or Exit closes it.
+
+`mmx --help` always prints command help. Running without arguments in a non-interactive environment, or with `--json` or `--yes`, prints help without waiting for input. Explicit subcommands remain available for scripts.
+
+### Diagnose and repair
+
+```bash
+mmx doctor                       # Readable local diagnostics; no network calls.
+mmx doctor --online              # Also check Brain access and MCP recall.
+mmx doctor --fix                 # Review the repair plan and confirm with arrow keys.
+mmx doctor --json                # Structured report, including the repair plan.
+mmx doctor --fix --yes --json     # Explicit non-interactive repair approval.
+```
+
+Doctor explains each problem and the suggested next action. Repair restores missing setup-managed entries and instructions/hooks, refreshes stale executable paths, and preserves unrelated configuration, the Brain binding, login, and Brain data. It backs up project configuration and runs an MCP recall check; a failed check rolls back configuration. Cloud repair can require browser login. Restart the configured agents after successful repair.
+
+Modified MCP entries, malformed configuration, unsafe paths, and conflicting integrations are not overwritten. If project files change after the repair plan is shown, repair stops so you can review a new plan. Connect-only integrations are diagnosed, but automatic repair requires a setup-managed installation. Use `mmx setup` for initial configuration. Diagnostics return a nonzero exit status while errors remain; warnings alone do not fail the command. Doctor output now defaults to text, so scripts should explicitly pass `--json`.
 
 ### Check status and switch Brains
 

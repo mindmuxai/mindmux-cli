@@ -67,7 +67,7 @@ async function transaction(root, files, run) {
     throw new Error(`${error.message} Project configuration restored. Backup: ${backup}`);
   }
 }
-function preflight(root, agents, manifest, migrate, remove = false) {
+function preflight(root, agents, manifest, migrate, remove = false, repair = false) {
   return agents.map(agent => {
     const files = integrationFiles(root, agent);
     guardPath(root, files.rules);
@@ -77,9 +77,30 @@ function preflight(root, agents, manifest, migrate, remove = false) {
       if (settings.hooks !== undefined && (!settings.hooks || typeof settings.hooks !== 'object' || Array.isArray(settings.hooks))) throw new Error(`Invalid hooks: ${files.hooks}`);
       for (const hooks of Object.values(settings.hooks || {})) if (!Array.isArray(hooks)) throw new Error(`Invalid hook array: ${files.hooks}`);
     }
-    return { agent, plan: planHost(root, agent, manifest.agents?.[agent], { migrate, remove }) };
+    return { agent, plan: planHost(root, agent, manifest.agents?.[agent], { migrate, remove, repair }) };
   });
 }
+const fingerprint = files => createHash('sha256').update(JSON.stringify(files)).digest('hex');
+export function planRepair(root) {
+  const manifest = readJson(setupPath(root), {});
+  const agents = Object.keys(manifest.agents || {});
+  if (!agents.length) throw new Error('No setup-managed agents. Run mmx setup to configure this project.');
+  if (agents.some(agent => !supported.includes(agent))) throw new Error('Unknown setup-managed agent. Inspect the setup manifest before repairing.');
+  if (binding(root).kind === 'unbound') throw new Error('No Brain selected. Run mmx setup to choose one.');
+  preflight(root, agents, manifest, false, false, true);
+  const files = snapshot(root, pathsFor(root, agents));
+  return { agents, files: files.map(file => file.path), fingerprint: fingerprint(files),
+    actions: ['Refresh managed MCP launchers and restore missing managed entries.',
+      'Refresh managed project instructions and hooks; preserve surrounding user content.',
+      'Back up project configuration and verify MCP launch and Brain recall.'],
+    note: 'Brain binding and data are kept. Cloud validation may require browser login. Restart the selected agents after repair.' };
+}
+export async function applyRepair(root, plan, flags = {}, dependencies = {}) {
+  const target = binding(root);
+  return setup(root, { json: flags.json, yes: true, 'no-open': flags['no-open'], agent: plan.agents.join(','), ...(target.kind === 'local' ? { local: true } : {}) },
+    { ...dependencies, repair: true, expectedFingerprint: plan.fingerprint });
+}
+
 export async function switchBrain(root, flags = {}, dependencies = {}) {
   const agents = Object.keys(readJson(setupPath(root), {}).agents || {});
   if (!agents.length) throw new Error('No setup-managed agents. Run mmx setup first.');
@@ -119,14 +140,15 @@ export async function setup(root, flags = {}, dependencies = {}) {
     const manifest = readJson(setupPath(root), {});
     let migrate = Boolean(flags.migrate);
     let plans;
-    try { plans = preflight(root, agents, manifest, migrate); }
+    try { plans = preflight(root, agents, manifest, migrate, false, Boolean(dependencies.repair)); }
     catch (error) {
       if (!interactive || migrate || !error.message.includes('--migrate')) throw error;
       migrate = await prompts.confirm(`${error.message}\nReplace and back up the existing MCP configuration?`);
       if (!migrate) throw error;
-      plans = preflight(root, agents, manifest, migrate);
+      plans = preflight(root, agents, manifest, migrate, false, Boolean(dependencies.repair));
     }
     const files = snapshot(root, pathsFor(root, agents));
+    if (dependencies.expectedFingerprint && fingerprint(files) !== dependencies.expectedFingerprint) throw new Error('Configuration changed after the repair plan was shown. Run mmx doctor --fix again.');
     const warnings = legacyWarnings(root);
     if (warnings.length) console.error(warnings.join('\n'));
     const current = binding(root);
@@ -206,8 +228,10 @@ export async function setup(root, flags = {}, dependencies = {}) {
     return await transaction(root, files, async () => {
       if (flags.local) {
         // Local Brain data survives a configuration rollback and is never deleted by remove.
-        localCommand(root, ['init', '--no-wire']);
-        mergePreferences(root, { cloudBrain: { ...preferences(root).cloudBrain, enabled: false } });
+        if (!dependencies.repair) {
+          localCommand(root, ['init', '--no-wire']);
+          mergePreferences(root, { cloudBrain: { ...preferences(root).cloudBrain, enabled: false } });
+        }
       } else mergePreferences(root, { cloudBrain: { enabled: true, ...selected }, mindmuxCli: { ...preferences(root).mindmuxCli, server } });
       for (const { agent, plan } of plans) {
         if (migrate) localCommand(root, ['uninstall-hooks', '--agent', agent]);

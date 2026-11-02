@@ -44,10 +44,10 @@ function inheritedCodex(root) {
   if (servers.mindmux_cli) throw new Error('Global Codex entry mindmux_cli already exists. Rename it before project setup to avoid merged transports.');
   return found;
 }
-export function planHost(root, agent, previous, { migrate = false, remove = false } = {}) {
+export function planHost(root, agent, previous, { migrate = false, remove = false, repair = false } = {}) {
   const state = hostState(root, agent), desired = launcher(root);
   const { data, key, entry, name, path } = state;
-  if (previous && !same(entry, previous.installed)) throw new Error(`MindMux MCP entry changed outside the installer: ${path}. Preserve or repair it before continuing.`);
+  if (previous && !same(entry, previous.installed) && !(repair && entry === undefined)) throw new Error(`MindMux MCP entry changed outside the installer: ${path}. Preserve or repair it before continuing.`);
   if (!previous && entry && !same(entry, desired)) {
     if (!migrate || typeof entry.url !== 'string') throw new Error(`Existing ${name} MCP entry in ${path}. Use --migrate to explicitly replace a remote entry; it will be backed up.`);
   }
@@ -55,7 +55,7 @@ export function planHost(root, agent, previous, { migrate = false, remove = fals
   const suppress = { ...previous?.suppressed };
   if (agent === 'codex') {
     for (const [legacy, original] of Object.entries(suppress)) {
-      if (!same(data[key]?.[legacy], { enabled: false })) throw new Error(`Project override for ${legacy} changed outside the installer: ${path}`);
+      if (!same(data[key]?.[legacy], { enabled: false }) && !(repair && data[key]?.[legacy] === undefined)) throw new Error(`Project override for ${legacy} changed outside the installer: ${path}`);
     }
     if (!remove) {
       const candidates = new Set([...inheritedCodex(root), ...Object.entries(data[key] || {}).filter(([id, value]) => id !== name && typeof value.url === 'string' && (id === 'mindmux' || value.url.startsWith('https://mcp.mindmux.ai/'))).map(([id]) => id)]);

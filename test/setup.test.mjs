@@ -24,7 +24,7 @@ function fixture(t) {
 }
 function cli(f, args, fail = false) {
   return new Promise((resolve, reject) => {
-    const child = execFile(process.execPath, [bin, '--project', f.root, ...(args[0] === 'setup' ? ['--json'] : []), ...args], { env: { ...process.env, MINDMUX_HOME: f.home, CODEX_HOME: f.codexHome }, timeout: 45000 }, (error, stdout, stderr) => {
+    const child = execFile(process.execPath, [bin, '--project', f.root, ...(['setup', 'doctor', 'remove'].includes(args[0]) ? ['--json'] : []), ...args], { env: { ...process.env, MINDMUX_HOME: f.home, CODEX_HOME: f.codexHome }, timeout: 45000 }, (error, stdout, stderr) => {
       if (fail) return error ? resolve(stderr) : reject(new Error('Expected failure'));
       if (error) return reject(new Error(stderr || error.message));
       try { resolve(JSON.parse(stdout)); } catch { reject(new Error(stdout)); }
