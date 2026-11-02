@@ -31,7 +31,13 @@ export async function diagnose(root, flags = {}, dependencies = {}) {
   for (const message of warnings) checks.push({ state: 'warning', message, next: 'Review the existing integration before migrating it with mmx setup --migrate.' });
   let repair;
   try { repair = { available: true, ...planRepair(root) }; }
-  catch (error) { repair = { available: false, reason: error.message }; }
+  catch (error) {
+    repair = { available: false, reason: error.message };
+    // A setup-managed project failing preflight is unhealthy, even if its files exist.
+    // Connect-only installations have no repair plan and remain supported.
+    if (report.mcp.length) checks.push({ state: 'error', message: `Configuration preflight failed: ${error.message}`,
+      next: 'Resolve the configuration conflict, then run mmx doctor again.' });
+  }
   return { ...report, node: process.version, checks, warnings, repair, healthy: !checks.some(item => item.state === 'error') };
 }
 

@@ -9,7 +9,8 @@ import { runMenu } from '../src/menu.mjs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { credentialPath } from '../src/cloud.mjs';
-import { writeJson } from '../src/storage.mjs';
+import { connect } from '../src/integrations.mjs';
+import { binding, writeJson } from '../src/storage.mjs';
 
 function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), 'mmx-doctor-'));
@@ -165,4 +166,79 @@ test('Cloud repair retains the explicit binding and login without any remote wri
   assert.deepEqual(JSON.parse(readFileSync(prefsPath)).cloudBrain, prefs.cloudBrain);
   assert.equal(readFileSync(credentialPath(server), 'utf8'), login);
   assert.deepEqual(calls, ['resolve_brain']);
+});
+
+
+test('doctor reports malformed instruction markers as unhealthy and exits nonzero without changing them', async t => {
+  const { root } = fixture(t); await install(root);
+  const rules = join(root, 'AGENTS.md'); const content = readFileSync(rules, 'utf8');
+  writeFileSync(rules, content + content);
+  const report = await diagnose(root);
+  assert.equal(report.healthy, false);
+  assert.equal(report.repair.available, false);
+  assert.ok(report.checks.some(check => check.state === 'error' && /Malformed.*markers/.test(check.message)));
+  assert.match(formatDoctor(report), /Malformed.*markers/);
+  const run = promisify(execFile), bin = new URL('../bin/mmx.mjs', import.meta.url).pathname;
+  for (const flags of [[], ['--json'], ['--fix', '--yes', '--json']]) {
+    await assert.rejects(run(process.execPath, [bin, '--project', root, 'doctor', ...flags]), error => {
+      assert.equal(error.code, 1);
+      if (flags.includes('--json')) assert.equal(JSON.parse(error.stdout).healthy, false);
+      else assert.match(error.stdout, /Malformed.*markers/);
+      return true;
+    });
+  }
+  assert.equal(readFileSync(rules, 'utf8'), content + content);
+});
+
+test('doctor surfaces global Codex transport conflicts in both text and JSON output', async t => {
+  const { root } = fixture(t); await install(root);
+  const globalConfig = join(process.env.CODEX_HOME, 'config.toml');
+  mkdirSync(process.env.CODEX_HOME, { recursive: true });
+  const content = '[mcp_servers.mindmux_cli]\nurl = "https://example.com/mcp"\n';
+  writeFileSync(globalConfig, content);
+  const report = await diagnose(root);
+  assert.equal(report.healthy, false);
+  assert.match(report.repair.reason, /Global Codex entry mindmux_cli/);
+  assert.match(formatDoctor(report), /Global Codex entry mindmux_cli/);
+  const run = promisify(execFile), bin = new URL('../bin/mmx.mjs', import.meta.url).pathname;
+  await assert.rejects(run(process.execPath, [bin, '--project', root, 'doctor', '--json']), error => {
+    assert.equal(error.code, 1); assert.equal(JSON.parse(error.stdout).healthy, false); return true;
+  });
+  const result = await doctor(root, { fix: true, yes: true, json: true });
+  assert.equal(result.repairResult.applied, false);
+  assert.equal(readFileSync(globalConfig, 'utf8'), content);
+});
+
+test('a valid connect-only installation remains healthy without an automatic repair plan', async t => {
+  const { root } = fixture(t); await install(root);
+  writeJson(join(root, '.mindmux/cli/setup.json'), { agents: {} });
+  connect(root, 'codex');
+  const report = await diagnose(root);
+  assert.equal(report.healthy, true);
+  assert.equal(report.repair.available, false);
+  assert.equal(report.checks.some(check => check.state === 'error'), false);
+});
+
+test('menu preserves local binding when refreshing or configuring agents after removal', async t => {
+  const { root } = fixture(t); await install(root);
+  let loginCalls = 0; const calls = [];
+  for (const installed of [true, false]) {
+    if (!installed) writeJson(join(root, '.mindmux/cli/setup.json'), { agents: {} });
+    let selected = false;
+    await runMenu(root, { write: () => {}, prompts: {
+      choose: async (_message, options) => {
+        if (selected) return 'exit'; selected = true;
+        return options.find(option => option.name === (installed ? 'Set up or refresh agent connections' : 'Set up this project')).value;
+      },
+    }, run: async args => {
+      calls.push(args);
+      await setup(root, { local: args.includes('--local'), agent: 'codex', yes: true, json: true }, {
+        ...dependencies, login: async () => { loginCalls++; throw new Error('Unexpected Cloud login'); },
+        cloud: async () => { throw new Error('Unexpected Cloud request'); },
+      });
+    } });
+    assert.equal(binding(root).kind, 'local');
+  }
+  assert.deepEqual(calls, [['setup', '--local'], ['setup', '--local']]);
+  assert.equal(loginCalls, 0);
 });

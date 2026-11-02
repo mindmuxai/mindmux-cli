@@ -7,17 +7,18 @@ export async function runMenu(root, { prompts = createSetupPrompts(), run, write
     let target, agents = [];
     try { target = binding(root); agents = Object.keys(readJson(join(root, '.mindmux/cli/setup.json'), {}).agents || {}); }
     catch { target = { kind: 'invalid' }; }
+    const setupArgs = target.kind === 'local' ? ['setup', '--local'] : ['setup'];
     const ready = ['local', 'cloud'].includes(target.kind) && agents.length > 0;
     write(`\nMindMux · ${basename(root)}\nBrain: ${target.kind === 'cloud' ? target.name || target.brainId : target.kind === 'local' ? 'Local' : target.kind === 'invalid' ? 'Configuration needs attention' : 'Not selected'}\nConfigured agents: ${agents.join(', ') || 'None'}\n`);
     try {
       const choice = await prompts.choose('What would you like to do?', [
-        ...(!ready ? [{ name: 'Set up this project', value: ['setup'] }] : []),
+        ...(!ready ? [{ name: 'Set up this project', value: setupArgs }] : []),
         { name: 'View status', value: ['status'] },
         { name: 'Check live connection', value: ['status', '--online'] },
         { name: 'Diagnose and repair', value: ['doctor', '--fix'] },
         ...(ready ? [
           { name: 'Switch Brain', value: ['switch'] },
-          { name: 'Set up or refresh agent connections', value: ['setup'] },
+          { name: 'Set up or refresh agent connections', value: setupArgs },
         ] : []),
         { name: 'More options', value: 'more' },
         { name: 'Exit', value: 'exit' },
