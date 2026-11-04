@@ -174,6 +174,7 @@ test('Cloud uses real SDK transport, validates binding, preserves expectedVersio
   const calls = [], sessions = new Set();
   let cloudRoot;
   let failCreate = false;
+  let indexAvailable = false;
   const server = createServer(async (req, res) => {
     if (req.headers.authorization !== 'Bearer test-access') { res.writeHead(401).end(); return; }
     let text = ''; for await (const chunk of req) text += chunk;
@@ -183,6 +184,10 @@ test('Cloud uses real SDK transport, validates binding, preserves expectedVersio
       return { content: [{ type: 'text', text: JSON.stringify(run(args)) }] };
     });
     register('resolve_brain', { brainId: z.string() }, args => ({ status: args.brainId === 'chosen' ? 'resolved' : 'unavailable', brain: { name: 'Test Cloud' } }));
+    if (indexAvailable) {
+      register('read_brain_index', { brainId: z.string() }, () => ({ path: 'brain/index.md', body: '# Brain Index\n- cloud-auth: OAuth summary', pages: [{ id: 'cloud-auth', title: 'OAuth auth', summary: 'OAuth summary', status: 'active' }], rootPages: [], count: 1, source: 'current-pages' }));
+      register('reindex_brain', { brainId: z.string() }, () => ({ generated: true, body: '# Brain Index' }));
+    }
     register('list_pages', { brainId: z.string() }, () => ({ pages: [{ id: 'cloud-auth', title: 'OAuth auth', status: 'active', version: 3, summary: 'OAuth' }] }));
     register('read_page', { brainId: z.string(), id: z.string() }, () => ({ version: 3, page: { compiledTruth: 'OAuth with PKCE' } }));
     register('search_pages', { brainId: z.string(), query: z.string(), maxResults: z.number().optional() }, () => ({ pages: [] }));
@@ -212,6 +217,13 @@ test('Cloud uses real SDK transport, validates binding, preserves expectedVersio
   writeFileSync(join(f.home, 'auth', `${hash}.json`), JSON.stringify({ tokens: { access_token: 'test-access', token_type: 'Bearer' } }));
   await cli(f, ['brain', 'bind', '--brain-id', 'chosen', '--server', url]);
   assert.equal((await cli(f, ['brain', 'list'])).pages[0].id, 'cloud-auth');
+  assert.equal((await cli(f, ['brain', 'index'])).source, 'page-list-compatibility');
+  indexAvailable = true;
+  const beforeIndex = calls.length;
+  assert.match((await cli(f, ['brain', 'index'])).body, /OAuth summary/);
+  assert.deepEqual(calls.slice(beforeIndex).map(c => c.name), ['resolve_brain', 'read_brain_index']);
+  assert.equal((await cli(f, ['brain', 'reindex'])).generated, true);
+  assert.equal(calls.find(c => c.name === 'reindex_brain').args.brainId, 'chosen');
   assert.equal((await cli(f, ['brain', 'read', 'cloud-auth'])).version, 3);
   assert.equal((await cli(f, ['brain', 'update-root', 'background', '--expected-version', 'new'], '# Background\nNew project')).version, 1);
   const creationCall = calls.find(call => call.name === 'update_root_page');

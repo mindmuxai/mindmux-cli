@@ -191,6 +191,8 @@ Brain commands return JSON by default.
 
 ```bash
 mmx brain status
+mmx brain index                    # Read the generated active-page index and root navigation.
+mmx brain reindex                  # Rebuild the derived index; requires write access.
 mmx brain list
 mmx brain search 'authentication'
 mmx brain recall 'implement authentication'
@@ -234,7 +236,7 @@ mmx mcp serve
 
 `mcp serve` is a stdio service launched by the host, with no network listener. It shares CLI authentication and refresh locks. In Cloud mode it proxies the account's tools and results. Tools that accept `brainId` are pinned to the project binding and reject a different ID. Account-level tools such as Workspace discovery and Project creation retain their original arguments and server-side permissions; project binding is not an account permission sandbox.
 
-The additional `mindmux_brain` tool supports local and Cloud status, list, search, recall, read, create, update, append, archive, roots, read-root, and update-root operations. Bodies pass through stdin without shell interpolation. Cloud `isError`, content, and structured content are preserved. Restart the MCP service after changing a binding.
+The additional `mindmux_brain` tool supports local and Cloud status, index, reindex, list, search, recall, read, create, update, append, archive, roots, read-root, and update-root operations. Bodies pass through stdin without shell interpolation. Cloud `isError`, content, and structured content are preserved. Restart the MCP service after changing a binding.
 
 ## Agent behavior and limits
 
@@ -262,7 +264,11 @@ Hooks and rules encourage relevant reads and confirmed writes; configuration alo
 - `review-requested`: one end-of-turn review requested.
 - `error` / `timeout`: a failure or the eight-second hook budget was exceeded. The task continues without switching Brains.
 
-Retrieval uses Chinese segmentation and English term matching, selecting up to three active pages, two core roots, and a bounded index within an 8 KiB UTF-8 budget. Cloud retrieval also searches up to three keywords. Vector retrieval and semantic reranking are not implemented.
+Retrieval starts with the Brain index: Page IDs, titles, summaries, categories, lifecycle states and tags, plus root-page navigation. The hook receives a bounded preview of complete index rows, with an explicit `brain index` instruction when rows are omitted; there is no fixed 20-page cutoff. Keyword retrieval supplements this directory with up to three active Page bodies and two core roots within an 8 KiB UTF-8 budget. A zero-length `pageIds` means no Page body was selected, not that the index is empty. The agent should read relevant Pages identified from the index even when keyword matching returns nothing. Local and Cloud full-text matches remain candidates even when their short summaries do not repeat the query. Vector retrieval and semantic reranking are not implemented.
+
+`brain index` returns a current active-page navigation view as `body`, structured `pages`, `rootPages`, and `count`. Local reads report whether the actual `brain/index.md` file is present. That canonical brain.md file may contain explicitly labeled draft/archived entries; its raw contents are not exposed through the active index API or hooks. Local `brain reindex` uses brain.md's generator to rebuild that file. Page writes continue to maintain the local index through brain.md.
+
+Cloud reads use `read_brain_index`; `reindex_brain` regenerates and persists a derived Markdown snapshot. Reads expose saved snapshot cursor/staleness metadata, never obsolete snapshot text. The main `body` is generated from current source Pages so a saved snapshot never overrides current truth. Indexes are generated documents: edit source Pages, then regenerate rather than supplying arbitrary index text. The Cloud service needs migration `0028_brain_indexes.sql` and the updated MCP server before the new Cloud index tools are available. For an older Cloud server without `read_brain_index`, the CLI builds the same navigation view from Cloud `list_pages` and `list_root_pages`, retaining summaries and marking `source: page-list-compatibility`. A failed supported index read is propagated; no local Brain fallback occurs.
 
 Raw user prompts are not persisted. Session retrieval caches under `.mindmux/cli/sessions/` contain Brain content and are ignored by Git, with mode `0600`. Pending Cursor delivery expires after ten minutes; changing a binding invalidates reuse. Historical cache cleanup is manual.
 

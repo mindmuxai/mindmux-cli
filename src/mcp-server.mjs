@@ -10,7 +10,7 @@ import { requireBinding, writeJson } from './storage.mjs';
 import { withCloud } from './cloud.mjs';
 import { CLI_BIN } from './integrations.mjs';
 
-const operations = ['status', 'list', 'search', 'recall', 'read', 'create', 'update', 'append', 'archive', 'roots', 'read-root', 'update-root'];
+const operations = ['status', 'index', 'reindex', 'list', 'search', 'recall', 'read', 'create', 'update', 'append', 'archive', 'roots', 'read-root', 'update-root'];
 const fields = ['id', 'title', 'category', 'status', 'source', 'expectedVersion', 'summary', 'kind', 'query', 'slug', 'body'];
 const brainTool = {
   name: 'mindmux_brain',

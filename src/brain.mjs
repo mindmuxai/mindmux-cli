@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { requireBinding } from './storage.mjs';
 import { withCloud } from './cloud.mjs';
+import { pageSummary, renderIndex } from './brain-index.mjs';
 
 const require = createRequire(import.meta.url);
 export const brainPackage = dirname(require.resolve('@mindmux/brain-md/package.json'));
@@ -37,7 +38,15 @@ export async function withBrain(root, run) {
     const resolved = await call('resolve_brain', { brainId: target.brainId });
     if (resolved.status !== 'resolved') throw new Error('Bound Cloud Brain is unavailable. Rebind explicitly; no local fallback was used.');
     const invoke = (name, args = {}) => call(name, { ...args, brainId: target.brainId });
-    return run({ target, invoke,
+    const index = async () => {
+      const tools = (await call.listTools()).tools;
+      if (tools.some(tool => tool.name === 'read_brain_index')) return invoke('read_brain_index');
+      const pages = (await invoke('list_pages')).pages;
+      const rootPages = (await invoke('list_root_pages')).rootPages;
+      return { path: 'brain/index.md', body: renderIndex(pages, rootPages), pages, rootPages, count: pages.length, source: 'page-list-compatibility' };
+    };
+    return run({ target, invoke, index,
+      reindex: () => invoke('reindex_brain'),
       list: async () => (await invoke('list_pages')).pages,
       read: id => invoke('read_page', { id }),
       roots: async () => (await invoke('list_root_pages')).rootPages,
@@ -62,14 +71,23 @@ export async function withBrain(root, run) {
   const api = await lib();
   const normalize = doc => ({ ...doc.frontmatter, id: doc.id, version: version(doc.raw),
     compiledTruth: api.extractSection(doc.body, 'compiled_truth'), raw: doc.raw,
-    summary: api.extractSection(doc.body, 'compiled_truth').split('\n').find(Boolean) || '' });
+    summary: pageSummary(api.extractSection(doc.body, 'compiled_truth'), doc.frontmatter.title) });
   const read = id => { idCheck(id); return normalize(api.loadDoc(join(target.directory, 'pages', `${id}.md`))); };
   const list = () => api.listPages().filter(p => p.frontmatter.status === 'active').map(normalize);
   const checkVersion = (current, expected) => {
     if (!expected || String(current.version) !== String(expected)) throw new Error('Version conflict or missing --expected-version. Read the current page before updating.');
   };
-  return run({ target, list, read,
-    roots: () => api.listRootPages().map(doc => ({ slug: doc.id, title: doc.frontmatter.title, version: version(doc.raw) })),
+  const roots = () => api.listRootPages().map(doc => ({ slug: doc.id, title: doc.frontmatter.title, version: version(doc.raw), updated: doc.frontmatter.updated }));
+  const index = () => {
+    const pages = list(), rootPages = roots();
+    return { path: join(target.directory, 'index.md'), body: renderIndex(pages, rootPages), storedIndexPresent: existsSync(join(target.directory, 'index.md')), pages: pages.map(({ raw, compiledTruth, ...p }) => p), rootPages, count: pages.length, source: 'current-pages' };
+  };
+  return run({ target, list, read, index,
+    reindex: () => localMutation(root, () => {
+      api.reindexBrain();
+      return { ...index(), generated: true };
+    }),
+    roots,
     readRoot: slug => { rootCheck(slug); const doc = api.loadDoc(join(target.directory, `${slug}.md`)); return { slug, body: doc.body, version: version(doc.raw) }; },
     search: query => list().filter(p => `${p.title}\n${p.compiledTruth}`.toLowerCase().includes(query.toLowerCase())),
     create: args => localMutation(root, () => {

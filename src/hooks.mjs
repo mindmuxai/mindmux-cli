@@ -46,11 +46,11 @@ export async function handleHook(root, agent, event, input) {
   writeJson(path, { targetKey: key, stopped });
   const result = binding(root).kind === 'unbound' ? { context: unboundContext, pageIds: [] }
     : await withBrain(root, brain => recall(brain, event === 'prompt' ? String(input.prompt || '').slice(0, 12000) : ''));
-  state = { targetKey: key, context: result.context, pageIds: result.pageIds, recalledAt: Date.now(), stopped,
+  state = { targetKey: key, context: result.context, pageIds: result.pageIds, indexCount: result.count, indexSource: result.indexSource, recalledAt: Date.now(), stopped,
     delivered: agent !== 'cursor' || event === 'session-start' };
   writeJson(path, state);
   recordHook(root, agent, event, { status: state.delivered ? 'emitted' : 'retrieved', pageIds: result.pageIds,
-    bytes: Buffer.byteLength(result.context), note: state.delivered ? 'Returned to host; model usage is not observable.' : 'Awaiting Cursor preToolUse; tool-free turns receive startup context only.' });
+    indexCount: result.count, indexSource: result.indexSource, bytes: Buffer.byteLength(result.context), note: state.delivered ? 'Returned to host; model usage is not observable.' : 'Awaiting Cursor preToolUse; tool-free turns receive startup context only.' });
   if (agent === 'cursor' && event === 'prompt') return { continue: true };
   return outputContext(result.context, event === 'session-start' ? 'SessionStart' : 'UserPromptSubmit');
 }

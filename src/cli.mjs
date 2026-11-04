@@ -32,6 +32,7 @@ Setup:
 Brain (JSON output, automatically uses the selected local/cloud Brain):
   mmx brain status | list | roots
   mmx brain read ID | read-root SLUG
+  mmx brain index | reindex
   mmx brain search QUERY | recall QUERY
   cat decision.md | mmx brain create --id ID --title TITLE --category decision [--status draft] [--source TEXT]
   cat decision.md | mmx brain update ID --expected-version VERSION --summary WHY [--source TEXT]
@@ -201,11 +202,13 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === 'brain' && action === 'status') { output(binding(root)); return; }
   if (command === 'brain') {
     // Validate operation before opening a cloud connection.
-    if (!['list', 'roots', 'read', 'read-root', 'search', 'recall', 'create', 'update', 'append', 'archive', 'update-root'].includes(action)) throw new Error('Unknown brain command. Run mmx help.');
+    if (!['index', 'reindex', 'list', 'roots', 'read', 'read-root', 'search', 'recall', 'create', 'update', 'append', 'archive', 'update-root'].includes(action)) throw new Error('Unknown brain command. Run mmx help.');
     let content;
     if (['create', 'update', 'update-root'].includes(action)) content = await body();
     const result = await withBrain(root, async brain => {
       switch (action) {
+        case 'index': return brain.index();
+        case 'reindex': return brain.reindex();
         case 'list': return { pages: (await brain.list()).map(({ raw, compiledTruth, ...page }) => page) };
         case 'roots': return { rootPages: await brain.roots() };
         case 'read': return brain.read(need(rest[0], 'page id'));
