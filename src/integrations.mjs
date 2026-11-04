@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readJson, writeJson, writeAtomic, ignoreRuntime, homeDir } from './storage.mjs';
@@ -21,20 +21,21 @@ export function integrationFiles(root, agent) {
   if (!AGENTS.includes(agent)) throw new Error(`Unknown agent. Choose ${AGENTS.join(', ')}.`);
   return agent === 'cursor' ? { rules: join(root, '.cursor/rules/mindmux.mdc'), hooks: join(root, '.cursor/hooks.json') }
     : agent === 'claude-code' ? { rules: join(root, 'CLAUDE.md'), hooks: join(root, '.claude/settings.json') }
-    : { rules: join(root, 'AGENTS.md') };
+    : { rules: join(root, 'AGENTS.md'), hooks: join(root, '.codex/hooks.json') };
 }
 function ruleText(root) {
   const command = `env ${shellQuote("MINDMUX_HOME=" + homeDir())} ${shellQuote(process.execPath)} ${shellQuote(CLI_BIN)} --project ${shellQuote(root)}`;
   return `MindMux Project Brain\n\n${MEMORY_POLICY}\n\nUse the following CLI command prefix from any working directory:\n\n\`${command}\`\n\nAt the start of every new task (including discussion), run \`<prefix> brain recall "task keywords"\` if relevant context has not arrived via a hook.\nOperations: \`brain list\`, \`brain search "keywords"\`, \`brain read <id>\`, \`brain roots\`, \`brain read-root <slug>\`. Results are JSON.\nCapture a confirmed decision: pipe its body to \`<prefix> brain create --id <id> --title "Title" --category decision --source "user confirmed ..."\`.\nUpdate: read first, then pipe the new body to \`<prefix> brain update <id> --expected-version <version> --summary "Why it changed"\`.\nPreserve unchanged values exactly, including code, quotes and backslashes. JSON output escapes are serialization, not literal Markdown content: decode the string before reusing it. Send body text through stdin using a quoted heredoc or a file, without adding shell/JSON escaping to the body. After creating or updating, read the page back and verify the intended changes and unchanged values before reporting success. If correction is needed, use the newly read version and record the reason.\nAppend evidence: \`<prefix> brain append <id> --kind evidence --summary "Evidence" --source "Source"\`.\nUse \`brain create --status draft\` for explicitly requested proposals; never present drafts as settled facts.\nThe CLI resolves the explicit project binding. For Cloud, do not fall back to local tools after an error. An authenticated MCP can also be used only with the same bound brainId shown by \`brain status\`.\nWhen another Brain guide documents local file commands, retain its data-format contract and route this project's operations through the binding above.\nIf unbound, ask the user to select/create a Brain; never infer a cloud Brain from a folder name.\nBefore finishing, check whether any confirmed durable knowledge remains uncaptured. If none, finish without creating a page.\n`;
 }
 function definitions(root, agent) {
+  root = realpathSync(root);
   const prefix = `env ${shellQuote("MINDMUX_HOME=" + homeDir())} ${shellQuote(process.execPath)} ${shellQuote(CLI_BIN)} --project ${shellQuote(root)} hook --agent ${agent}`;
   if (agent === 'cursor') return Object.fromEntries([
     ['sessionStart', 'session-start'], ['beforeSubmitPrompt', 'prompt'], ['preToolUse', 'pre-tool'], ['stop', 'stop'],
   ].map(([event, operation]) => [event, [{ command: `${prefix} ${operation}`, ...(event === 'stop' ? { loop_limit: 1 } : {}) }]]));
-  if (agent === 'claude-code') return Object.fromEntries([
+  if (agent === 'claude-code' || agent === 'codex') return Object.fromEntries([
     ['SessionStart', 'session-start'], ['UserPromptSubmit', 'prompt'], ['Stop', 'stop'],
-  ].map(([event, operation]) => [event, [{ hooks: [{ type: 'command', command: `${prefix} ${operation}`, timeout: 10 }] }]]));
+  ].map(([event, operation]) => [event, [{ hooks: [{ type: 'command', command: `${prefix} ${operation}`, timeout: 10, ...(agent === 'codex' && event !== 'Stop' ? { additionalContextLimit: 10000 } : {}) }] }]]));
   return {};
 }
 const commandOf = definition => definition.command || definition.hooks?.[0]?.command;
@@ -75,11 +76,11 @@ export function connect(root, agent, { remove = false } = {}) {
   if (settings) writeJson(files.hooks, settings);
   if (remove) delete manifest[agent];
   else manifest[agent] = { installedAt: new Date().toISOString(), bin: CLI_BIN, node: process.execPath,
-    commands: Object.values(defs).flat().map(commandOf), mode: agent === 'codex' ? 'instructions' : 'hooks' };
+    commands: Object.values(defs).flat().map(commandOf), mode: 'hooks' };
   writeJson(manifestPath, manifest);
-  ignoreRuntime(root);
-  return { agent, installed: !remove, mode: agent === 'codex' ? 'instructions-only' : 'hooks', ...files,
-    note: agent === 'codex' ? 'Codex uses AGENTS.md in v0.1; native hooks are not installed.' : 'Restart/reload the agent and review hook trust. doctor reports configured state; real delivery requires host execution.' };
+  ignoreRuntime(root, agent === 'codex' && !remove ? ['/.codex/hooks.json'] : []);
+  return { agent, installed: !remove, mode: 'hooks', ...files,
+    note: agent === 'codex' ? 'Restart Codex, trust the project, and review the installed hooks with /hooks. Hook execution requires a compatible Codex with hooks enabled.' : 'Restart/reload the agent and review hook trust. doctor reports configured state; real delivery requires host execution.' };
 }
 
 export function inspectIntegrations(root) {
@@ -89,8 +90,10 @@ export function inspectIntegrations(root) {
     const text = existsSync(files.rules) ? readFileSync(files.rules, 'utf8') : '';
     const hooks = files.hooks ? readJson(files.hooks, {}).hooks || {} : {};
     const actualCommands = Object.values(hooks).filter(Array.isArray).flat().map(commandOf);
+    const expected = Object.values(definitions(root, agent)).flat().map(commandOf);
     return { agent, mode: installed.mode, rulesPresent: text.includes(BEGIN) && text.includes(END),
-      hookCommandsPresent: installed.commands.every(command => actualCommands.includes(command)),
+      hookCommandsPresent: installed.commands.length > 0 && installed.commands.every(command => actualCommands.includes(command))
+        && expected.every(command => actualCommands.includes(command)),
       executablePresent: existsSync(installed.bin) && existsSync(installed.node),
       existingBrainMdHook: JSON.stringify(hooks).includes('brain-session-start') };
   });

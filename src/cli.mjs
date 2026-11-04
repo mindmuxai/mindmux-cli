@@ -50,7 +50,7 @@ Cloud discovery and low-level access:
 Run mmx without arguments in a terminal for the interactive menu.
 All commands accept --project PATH. No automatic cloud-to-local fallback.
 Cursor: startup context + prompt retrieval delivered at first tool call; one stop review.
-Claude Code: startup + prompt context; one stop review. Codex: instructions only in v0.1.
+Claude Code: startup + prompt context; one stop review. Codex: startup + prompt context; one stop review after project/hook trust.
 `;
 
 async function stdin(limit = 1024 * 1024) {
@@ -107,7 +107,8 @@ export async function main(argv = process.argv.slice(2)) {
     else {
       const agents = result.agents.map(agent => ({ 'claude-code': 'Claude Code', codex: 'Codex' })[agent] || agent).join(' and ');
       const project = result.binding.kind === 'cloud' ? result.binding.name : basename(result.project);
-      console.log(`\n✓ MindMux is ready.\n\nProject: ${project}\nConfigured for: ${agents}\n\nRestart ${agents} in this project and approve any trust prompts to get started.`);
+      const codexNote = result.agents.includes('codex') ? '\nIn Codex, trust this project and review the new or changed hooks with /hooks.' : '';
+      console.log(`\n✓ MindMux is ready.\n\nProject: ${project}\nConfigured for: ${agents}\n\nRestart ${agents} in this project and approve any trust prompts to get started.${codexNote}`);
     }
     return;
   }

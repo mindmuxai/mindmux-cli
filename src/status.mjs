@@ -50,7 +50,7 @@ export function formatStatus(report) {
   }
   lines.push(`Connection check: ${report.live ? report.live.accessible ? 'Brain reachable' + (report.mcpProbe?.recall ? '; MCP launch and recall passed' : '') : `Failed: ${report.live.error}` : 'Not run; use mmx status --online'}`);
   if (report.mcpProbe?.connected === false) lines.push(`MCP check: Failed: ${report.mcpProbe.error}`);
-  if (report.integrations.some(item => item.agent === 'codex')) lines.push('Codex uses project instructions; no native lifecycle hooks.');
+  if (report.integrations.some(item => item.agent === 'codex')) lines.push('Codex hooks require project trust and review in /hooks. Configuration does not prove execution.');
   const call = report.receipts.find(item => item.event === 'tool-call' && item.status === 'success');
   const hook = report.receipts.find(item => item.status === 'emitted');
   lines.push(`MCP activity: ${call ? `${call.client} called ${call.tool} at ${call.time}` : 'No tool calls observed for the current setup'}`);

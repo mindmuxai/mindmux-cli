@@ -60,10 +60,10 @@ export function requireBinding(root) {
   if (value.kind === 'unbound') throw new Error('No Brain selected. Run mmx init --local or mmx brain bind --brain-id <id>.');
   return value;
 }
-export function ignoreRuntime(root) {
+export function ignoreRuntime(root, extraEntries = []) {
   const path = join(root, '.gitignore');
   let text = existsSync(path) ? readFileSync(path, 'utf8') : '';
-  for (const entry of ['/.mindmux/preferences.json', '/.mindmux/cli/']) {
+  for (const entry of ['/.mindmux/preferences.json', '/.mindmux/cli/', ...extraEntries]) {
     if (!text.split(/\r?\n/).includes(entry)) text += `${text && !text.endsWith('\n') ? '\n' : ''}${entry}\n`;
   }
   writeAtomic(path, text);

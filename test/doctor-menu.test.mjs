@@ -242,3 +242,18 @@ test('menu preserves local binding when refreshing or configuring agents after r
   assert.deepEqual(calls, [['setup', '--local'], ['setup', '--local']]);
   assert.equal(loginCalls, 0);
 });
+
+
+test('doctor flags disabled or unsupported Codex hooks and distinguishes unavailable capability checks', async t => {
+  const { root } = fixture(t); await install(root);
+  for (const [capability, healthy, state] of [
+    [{ supported: true, enabled: false }, false, 'error'],
+    [{ supported: false, enabled: false }, false, 'error'],
+    [{ supported: null, enabled: null }, true, 'warning'],
+    [{ supported: true, enabled: true }, true, 'ok'],
+  ]) {
+    const report = await diagnose(root, {}, { codexHooks: () => ({ ...capability, message: 'Fixture hook capability' }) });
+    assert.equal(report.healthy, healthy);
+    assert.equal(report.checks.find(check => check.message === 'Fixture hook capability').state, state);
+  }
+});

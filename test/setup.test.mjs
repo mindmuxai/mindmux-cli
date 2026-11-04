@@ -102,6 +102,7 @@ test('failed probe rolls back config and preserves existing local Brain data', a
   await assert.rejects(setup(f.root, { local: true, agent: 'codex', yes: true }, { probe: async () => { throw new Error('simulated transport failure'); } }), /configuration restored/);
   assert.equal(readFileSync(join(f.root, 'AGENTS.md'), 'utf8'), 'my instructions\n');
   assert.equal(existsSync(join(f.root, '.codex/config.toml')), false);
+  assert.equal(existsSync(join(f.root, '.codex/hooks.json')), false);
   assert.equal(existsSync(join(f.root, '.mindmux/preferences.json')), false);
   assert.ok(existsSync(join(f.root, 'brain/index.md')));
 });
@@ -160,6 +161,7 @@ test('interrupting setup during probe rolls back configuration and releases its 
   await once(child.stdout, 'data');
   const exited = once(child, 'exit'); child.kill('SIGTERM'); await exited;
   assert.equal(existsSync(join(f.root, '.codex/config.toml')), false);
+  assert.equal(existsSync(join(f.root, '.codex/hooks.json')), false);
   assert.equal(existsSync(join(f.root, '.mindmux/preferences.json')), false);
   assert.equal(existsSync(join(f.root, '.mindmux/cli/setup.lock')), false);
   assert.ok(existsSync(join(f.root, 'brain/index.md')));
@@ -353,4 +355,48 @@ test('status distinguishes Brain access from MCP launch failures', async t => {
   assert.equal(report.live.accessible, true);
   assert.equal(report.mcpProbe.connected, false);
   assert.match(formatStatus(report), /MCP check: Failed: launcher failed/);
+});
+
+test('Codex setup upgrades instructions-only installs, preserves foreign hooks and removes only owned hooks', async t => {
+  const f = fixture(t);
+  const hooksPath = join(f.root, '.codex/hooks.json'); mkdirSync(join(f.root, '.codex'));
+  const foreign = { description: 'User hooks', hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo user-hook' }] }] } };
+  writeJson(hooksPath, foreign);
+  await cli(f, ['setup', '--local', '--agent', 'codex', '--yes']);
+  const installed = JSON.parse(readFileSync(hooksPath));
+  assert.match(readFileSync(join(f.root, '.gitignore'), 'utf8'), /\/\.codex\/hooks\.json/);
+  assert.equal(installed.hooks.SessionStart[0].hooks[0].additionalContextLimit, 10000);
+  assert.equal(installed.hooks.Stop.at(-1).hooks[0].additionalContextLimit, undefined);
+  assert.equal(installed.description, 'User hooks');
+  assert.deepEqual(installed.hooks.Stop[0], foreign.hooks.Stop[0]);
+  for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop']) assert.ok(installed.hooks[event].some(group => group.hooks[0].command.includes('hook --agent codex')));
+  const manifestPath = join(f.root, '.mindmux/cli/integrations.json');
+  const manifest = JSON.parse(readFileSync(manifestPath)); manifest.codex.commands = []; manifest.codex.mode = 'instructions'; writeJson(manifestPath, manifest);
+  writeJson(hooksPath, foreign);
+  const run = promisify(execFile);
+  const env = { ...process.env, MINDMUX_HOME: f.home, CODEX_HOME: f.codexHome };
+  await assert.rejects(run(process.execPath, [bin, '--project', f.root, 'doctor', '--json'], { env }), error => {
+    assert.equal(JSON.parse(error.stdout).healthy, false); return true;
+  });
+  const fixed = JSON.parse((await run(process.execPath, [bin, '--project', f.root, 'doctor', '--fix', '--yes', '--json'], { env })).stdout);
+  assert.equal(fixed.repairResult.applied, true);
+  assert.equal(fixed.integrations[0].mode, 'hooks');
+  await cli(f, ['setup', '--local', '--agent', 'codex', '--yes']);
+  assert.equal(JSON.parse(readFileSync(hooksPath)).hooks.Stop.length, 2);
+  await cli(f, ['remove']);
+  assert.deepEqual(JSON.parse(readFileSync(hooksPath)), foreign);
+});
+
+
+test('malformed Codex hooks fail before setup changes instructions or binding', async t => {
+  const f = fixture(t); mkdirSync(join(f.root, '.codex'));
+  const path = join(f.root, '.codex/hooks.json');
+  writeFileSync(join(f.root, 'AGENTS.md'), 'Keep these instructions.\n');
+  for (const content of ['{invalid', '{"hooks":{"Stop":{}}}']) {
+    writeFileSync(path, content);
+    await cli(f, ['setup', '--local', '--agent', 'codex', '--yes'], true);
+    assert.equal(readFileSync(path, 'utf8'), content);
+    assert.equal(readFileSync(join(f.root, 'AGENTS.md'), 'utf8'), 'Keep these instructions.\n');
+    assert.equal(existsSync(join(f.root, '.mindmux/preferences.json')), false);
+  }
 });

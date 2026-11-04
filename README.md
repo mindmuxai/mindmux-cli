@@ -73,7 +73,17 @@ mmx remove --agent codex
 
 `--yes` disables terminal questions. It does not bypass OAuth, agent trust prompts, or the `--confirm` requirement for Project creation. Non-interactive Cloud setup requires explicit agents and either an existing Cloud binding, a Brain ID, or Project creation options. `--no-open` prints the authorization URL instead of opening a browser.
 
-Claude Code uses the `mindmux` entry in `.mcp.json`, plus `CLAUDE.md` and hooks. Codex uses `mindmux_cli` in `.codex/config.toml`, plus `AGENTS.md` instructions. These MCP identifiers remain unchanged by the executable rename. Generated MCP configuration contains executable paths and `MINDMUX_HOME`, rather than copied OAuth tokens. Restart the agent after setup and approve the applicable trust prompts.
+Claude Code uses the `mindmux` entry in `.mcp.json`, plus `CLAUDE.md` and hooks. Codex uses `mindmux_cli` in `.codex/config.toml`, plus `AGENTS.md` instructions and native hooks in `.codex/hooks.json`. These MCP identifiers remain unchanged by the executable rename. Generated MCP configuration contains executable paths and `MINDMUX_HOME`, rather than copied OAuth tokens. Restart the agent after setup and approve the applicable trust prompts.
+
+### Codex hook setup and upgrades
+
+The [official Codex hooks documentation](https://learn.chatgpt.com/docs/hooks) describes the host protocol and trust controls. Codex hooks require a compatible Codex installation with the `hooks` feature enabled. Setup checks `codex features list` and warns if support cannot be verified or hooks are disabled; it does not change global Codex settings. Doctor reports unsupported or disabled hooks as errors and unavailable capability checks as warnings. If needed, update Codex or run `codex features enable hooks`.
+
+For an existing instructions-only installation, rerun `mmx setup --agent codex` (add `--local` for a local Brain), or use `mmx doctor --fix`. Setup installs SessionStart, UserPromptSubmit, and Stop handlers in `.codex/hooks.json`, preserves unrelated hooks, and keeps `AGENTS.md` as workflow guidance. It does not change the brain.md storage implementation. Status and doctor detect older instructions-only installs as missing hooks. Setup adds `.codex/hooks.json` to the project's `.gitignore`; run setup in each worktree that needs these hooks.
+
+Restart Codex, trust the project, and open `/hooks` to review new or changed definitions. Codex skips untrusted hooks; the CLI does not approve hooks or alter Codex's trust records. Hooks may also exist in global or inline TOML configuration, so inspect `/hooks` for duplicates. `mmx remove --agent codex` removes the hooks installed by setup while preserving unrelated hook definitions; `mmx clean` also removes the managed hooks as part of its local reset.
+
+SessionStart injects base Brain context (including after resume/compaction); UserPromptSubmit retrieves relevant project knowledge. Stop requests at most one additional memory review per turn, and continuation prompts do not reset this guard. Writes still require the agent to identify confirmed durable knowledge and call the CLI/MCP. Hook failures are recorded and allow the task to proceed; no automatic Cloud-to-local fallback occurs. Use `mmx status` to inspect observed hook delivery, or `mmx doctor` to check installation and Codex hook capability; neither can verify that Codex trusted a definition or used the returned context.
 
 ### Interactive menu
 
@@ -106,7 +116,7 @@ mmx switch --brain-id <brain-id> --yes
 mmx switch --local --yes
 ```
 
-`status` distinguishes saved credentials, agent configuration, live read-only checks, successful MCP client tool calls, and hook context delivery. Successful setup is described as **Configured for**, because it does not establish that the agent has connected. Codex uses project instructions, without native lifecycle hooks. Neither a tool call nor delivered context proves that the model used the knowledge in its answer.
+`status` distinguishes saved credentials, agent configuration, live read-only checks, successful MCP client tool calls, and hook context delivery. Successful setup is described as **Configured for**, because it does not establish that the agent has connected. Codex uses native lifecycle hooks alongside project instructions. Project-local hooks require a trusted project and review of each hook definition through `/hooks`. Neither a tool call nor delivered context proves that the model used the knowledge in its answer.
 
 Usage receipts are bounded to the most recent successful MCP tool call and each hook event. They record timestamps, client/tool/operation names and a binding fingerprint, without tool arguments or results. Setup and status probes do not count as agent activity. Status ignores receipts from a different binding or before the latest successful setup; it cannot observe calls made directly to a separate remote MCP connection or CLI.
 
@@ -231,7 +241,7 @@ The additional `mindmux_brain` tool supports local and Cloud status, list, searc
 | Agent | Session start | User request | End of turn |
 | --- | --- | --- | --- |
 | Claude Code | SessionStart context, including supported resume/compaction boundaries | UserPromptSubmit retrieval and injection | One Stop review, with recursion protection |
-| Codex | AGENTS.md instructions to recall relevant context | Instruction-driven | Instruction-driven; no native hooks installed in v0.1 |
+| Codex | SessionStart hook + AGENTS.md | UserPromptSubmit hook context | Stop hook requests one memory review |
 | Cursor local agent | sessionStart base context | beforeSubmitPrompt retrieval; first preToolUse delivers relevant context | One stop follow-up, with `loop_limit=1` |
 
 Unified `setup` supports Claude Code and Codex. To install Cursor rules and hooks separately, first bind or initialize a Brain, then run:
@@ -243,7 +253,7 @@ mmx disconnect --agent cursor
 
 Cursor's beforeSubmitPrompt hook is used for retrieval, not context injection. Its sessionStart hook is fire-and-forget, and preToolUse may run after the first tool's arguments have already been constructed. A turn with no tool calls depends on startup context and persistent rules. Cloud agent VMs are outside the supported scope of this local integration.
 
-Hooks and rules encourage relevant reads and confirmed writes; configuration alone does not prove that an agent has used the knowledge. Codex relies on instructions rather than enforced native hooks. The CLI does not run an additional LLM, read conversation transcripts, or automatically turn discussion into facts. A Stop review may add one model continuation and associated latency/cost; the agent can finish without writing when there is no new knowledge.
+Hooks and rules encourage relevant reads and confirmed writes; configuration alone does not prove that an agent has used the knowledge. Claude Code and Codex both use startup, prompt, and Stop hooks alongside project instructions. The CLI does not run an additional LLM, read conversation transcripts, or automatically turn discussion into facts. A Stop review may add one model continuation and associated latency/cost; the agent can finish without writing when there is no new knowledge.
 
 `doctor` checks files, executable paths, and recent hook receipts:
 

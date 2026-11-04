@@ -10,6 +10,7 @@ import { connect, integrationFiles, managedBlock } from './integrations.mjs';
 import { localCommand } from './brain.mjs';
 import { planHost, hostState, guardPath } from './host-config.mjs';
 import { probeMcp } from './mcp-server.mjs';
+import { inspectCodexHooks } from './codex-hooks.mjs';
 import { createSetupPrompts } from './prompts.mjs';
 
 const supported = ['claude-code', 'codex'];
@@ -149,7 +150,8 @@ export async function setup(root, flags = {}, dependencies = {}) {
     }
     const files = snapshot(root, pathsFor(root, agents));
     if (dependencies.expectedFingerprint && fingerprint(files) !== dependencies.expectedFingerprint) throw new Error('Configuration changed after the repair plan was shown. Run mmx doctor --fix again.');
-    const warnings = legacyWarnings(root);
+    const codexHooks = agents.includes('codex') ? (dependencies.codexHooks || inspectCodexHooks)() : undefined;
+    const warnings = [...legacyWarnings(root), ...(codexHooks && (!codexHooks.supported || !codexHooks.enabled) ? [codexHooks.message] : [])];
     if (warnings.length) console.error(warnings.join('\n'));
     const current = binding(root);
     const server = serverUrl(flags.server || (current.kind === 'cloud' ? current.server : readJson(join(homeDir(), 'config.json'), {}).server) || DEFAULT_SERVER);
@@ -249,8 +251,8 @@ export async function setup(root, flags = {}, dependencies = {}) {
       const probe = await (dependencies.probe || probeMcp)(root);
       const pending = readJson(pendingPath, {});
       if (pending.brainId && pending.brainId === selected?.brainId) rmSync(pendingPath, { force: true });
-      return { installed: true, project: root, binding: binding(root), agents, mcp: probe, warnings: legacyWarnings(root),
-        next: 'Restart the selected Agent in this project and approve its MCP/project/hook trust prompts. Codex uses AGENTS.md instructions, not native hooks.' };
+      return { installed: true, project: root, binding: binding(root), agents, mcp: probe, codexHooks, warnings,
+        next: 'Restart the selected Agent in this project and approve its MCP/project/hook trust prompts. For Codex, trust the project and review the installed hooks with /hooks.' };
     });
   } catch (error) {
     if (error.name === 'ExitPromptError') throw new Error('Setup cancelled.');

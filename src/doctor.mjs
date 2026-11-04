@@ -1,3 +1,4 @@
+import { inspectCodexHooks } from './codex-hooks.mjs';
 import { status } from './status.mjs';
 import { planRepair, applyRepair, legacyWarnings } from './setup.mjs';
 import { createSetupPrompts } from './prompts.mjs';
@@ -25,6 +26,11 @@ export async function diagnose(root, flags = {}, dependencies = {}) {
       `${integration.agent}: project instructions and hooks ${integration?.rulesPresent && integration?.hookCommandsPresent && integration?.executablePresent ? 'are present' : 'need attention'}.`,
       'Run mmx doctor --fix to restore managed instructions and hooks.');
   }
+  if (report.mcp.some(item => item.agent === 'codex') || report.integrations.some(item => item.agent === 'codex')) {
+    report.codexHooks = (dependencies.codexHooks || inspectCodexHooks)();
+    if (report.codexHooks.supported === null) checks.push({ state: 'warning', message: report.codexHooks.message });
+    else check(report.codexHooks.supported && report.codexHooks.enabled, report.codexHooks.message, 'Install a compatible Codex with hooks enabled, then review the project and /hooks trust prompts.');
+  }
   if (report.live) check(report.live.accessible, report.live.accessible ? 'Brain access check passed.' : `Brain access failed: ${report.live.error}`, 'Check your network, login and Brain permissions; rerun mmx doctor --online.');
   if (report.mcpProbe) check(report.mcpProbe.connected, report.mcpProbe.connected ? 'MCP launch and recall check passed.' : `MCP check failed: ${report.mcpProbe.error}`, 'Run mmx doctor --fix to review the managed configuration.');
   const warnings = [...legacyWarnings(root), ...report.integrations.filter(i => i.existingBrainMdHook).map(i => `${i.agent}: an existing brain.md hook may deliver duplicate context.`)];
@@ -49,7 +55,7 @@ export function formatDoctor(report) {
     if (item.next) lines.push(`  ${item.next}`);
   }
   if (!report.live) lines.push('', 'Use mmx doctor --online to check live Brain access and MCP recall.');
-  if (report.integrations?.some(item => item.mode === 'instructions')) lines.push('Codex uses project instructions; no native lifecycle hooks.');
+  if (report.integrations?.some(item => item.agent === 'codex')) lines.push('Codex hook trust is managed by Codex. Review /hooks; configuration does not prove trust or execution.');
   if (!report.healthy && !report.repair.available) lines.push('', `Automatic repair unavailable: ${report.repair.reason}`);
   lines.push('', 'Configuration and self-checks do not prove that an agent used recalled knowledge.');
   return lines.join('\n');

@@ -36,7 +36,7 @@ test('clean resets local setup, data, caches, project backups and login while pr
   put(join(f.root, 'keep.txt'), 'source content');
   const result = await run(f, 'clean', '--yes');
   assert.equal(result.cleaned, true); assert.equal(result.signedOut, true); assert.equal(result.cloudDataDeleted, false);
-  for (const path of ['brain', 'BRAIN.md', '.mindmux/preferences.json', '.mindmux/cli', '.mcp.json', '.claude/settings.json', '.cursor/rules/mindmux.mdc']) assert.equal(existsSync(join(f.root, path)), false, path);
+  for (const path of ['brain', 'BRAIN.md', '.mindmux/preferences.json', '.mindmux/cli', '.mcp.json', '.claude/settings.json', '.codex/hooks.json', '.cursor/rules/mindmux.mdc']) assert.equal(existsSync(join(f.root, path)), false, path);
   assert.equal(readFileSync(join(f.root, 'AGENTS.md'), 'utf8').trim(), 'Keep my instructions.');
   assert.equal(readFileSync(join(f.root, '.codex/config.toml'), 'utf8').trim(), 'model = "custom"');
   assert.equal(readFileSync(join(f.root, 'keep.txt'), 'utf8'), 'source content');
@@ -118,4 +118,16 @@ test('external local Brain data requires explicit inclusion and preserves a cust
   await run(f, 'clean', '--include-external-data', '--yes');
   assert.equal(existsSync(sidecar), false);
   assert.equal(readFileSync(join(f.root, 'BRAIN.md'), 'utf8'), 'Customized Brain instructions.');
+});
+
+
+test('clean preserves unrelated Codex hooks while removing managed lifecycle handlers', async t => {
+  const f = fixture(t);
+  const path = join(f.root, '.codex/hooks.json');
+  const foreign = { hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo keep-user-hook' }] }] } };
+  put(path, foreign);
+  await run(f, 'setup', '--local', '--agent', 'codex', '--yes');
+  assert.equal(JSON.parse(readFileSync(path)).hooks.Stop.length, 2);
+  await run(f, 'clean', '--yes');
+  assert.deepEqual(JSON.parse(readFileSync(path)), foreign);
 });

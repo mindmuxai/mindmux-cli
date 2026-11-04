@@ -291,3 +291,28 @@ test('OAuth performs discovery, dynamic registration, state validation and PKCE 
   assert.equal(stored.tokens.access_token, 'oauth-token');
   assert.equal(stored.verifier, undefined);
 });
+
+test('Codex hooks inject context, bound Stop review across continuations, and reset on the next real prompt', async t => {
+  const f = fixture(t); await cli(f, ['init', '--local']); await seed(f);
+  const invoke = (event, input) => cli(f, ['hook', event, '--agent', 'codex'], JSON.stringify(input));
+  const input = { session_id: 'codex-session', turn_id: 'turn-one', prompt: '认证 SECRET_CODEX_PROMPT' };
+  const startup = await invoke('session-start', { ...input, source: 'startup' });
+  assert.equal(startup.hookSpecificOutput.hookEventName, 'SessionStart');
+  const prompt = await invoke('prompt', input);
+  assert.equal(prompt.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+  assert.match(prompt.hookSpecificOutput.additionalContext, /OAuth/);
+  const receipt = JSON.parse(readFileSync(join(f.project, '.mindmux/cli/last-codex-prompt.json')));
+  assert.equal(receipt.status, 'emitted');
+  const stop = await invoke('stop', input); assert.equal(stop.decision, 'block');
+  assert.deepEqual(await invoke('prompt', { ...input, prompt: stop.reason }), {});
+  assert.deepEqual(await invoke('stop', { ...input, stop_hook_active: true }), {});
+  assert.deepEqual(await invoke('stop', input), {});
+  await invoke('session-start', { ...input, source: 'compact' });
+  assert.deepEqual(await invoke('stop', input), {});
+  await invoke('prompt', { ...input, turn_id: 'turn-two', prompt: '新的认证要求' });
+  assert.equal((await invoke('stop', { ...input, turn_id: 'turn-two' })).decision, 'block');
+  assert.deepEqual(await invoke('stop', { ...input, session_id: 'aborted', status: 'aborted' }), {});
+  for (const file of readdirSync(join(f.project, '.mindmux/cli/sessions'))) assert.doesNotMatch(readFileSync(join(f.project, '.mindmux/cli/sessions', file), 'utf8'), /SECRET_CODEX_PROMPT/);
+  writeFileSync(join(f.project, '.mindmux/preferences.json'), '{invalid');
+  assert.deepEqual(await invoke('prompt', input), {});
+});
