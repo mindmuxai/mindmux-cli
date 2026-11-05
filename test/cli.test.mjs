@@ -328,3 +328,33 @@ test('Codex hooks inject context, bound Stop review across continuations, and re
   writeFileSync(join(f.project, '.mindmux/preferences.json'), '{invalid');
   assert.deepEqual(await invoke('prompt', input), {});
 });
+
+test('writing guidance reaches installed rules, recall hooks and MCP without translating submitted content', async t => {
+  const f = fixture(t);
+  await cli(f, ['init', '--local']);
+  await seed(f);
+  await cli(f, ['connect', '--agent', 'codex']);
+  const checkPolicy = text => {
+    assert.match(text, /Chinese conversations produce Chinese knowledge; English conversations produce English knowledge/);
+    assert.match(text, /before headings, dates, provenance or lists/);
+    assert.match(text, /Do not infer the knowledge language from CLI prompts/);
+  };
+  checkPolicy(readFileSync(join(f.project, 'AGENTS.md'), 'utf8'));
+  const hook = await cli(f, ['hook', '--agent', 'codex', 'session-start'], JSON.stringify({ session_id: 'writing-policy-check' }));
+  checkPolicy(hook.hookSpecificOutput.additionalContext);
+  const client = new Client({ name: 'writing-policy-test', version: '1' });
+  const transport = new StdioClientTransport({ command: process.execPath, args: [bin, '--project', f.project, 'mcp', 'serve'], env: { ...process.env, MINDMUX_HOME: f.home }, stderr: 'pipe' });
+  transport.stderr?.on('data', () => {});
+  try {
+    await client.connect(transport);
+    checkPolicy(client.getInstructions());
+    const { tools } = await client.listTools();
+    checkPolicy(tools.find(tool => tool.name === 'mindmux_brain').description);
+  } finally { await client.close(); }
+  const english = 'Keep the API compatible. Read this Page when changing the API.\n\n## Details\nPreserve OAuth URLs and field names.';
+  const saved = await cli(f, ['brain', 'create', '--id', 'english-contract', '--title', 'API contract', '--category', 'decision', '--source', 'User confirmed in English'], english);
+  assert.equal(saved.compiledTruth.trim(), english);
+  const index = await cli(f, ['brain', 'index']);
+  assert.equal(index.pages.find(page => page.id === 'auth-choice').summary, '认证使用 OAuth，不在仓库保存 API Key。');
+  assert.equal(index.pages.find(page => page.id === 'english-contract').summary, english.split('\n')[0]);
+});

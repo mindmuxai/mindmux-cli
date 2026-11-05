@@ -257,6 +257,10 @@ Cursor's beforeSubmitPrompt hook is used for retrieval, not context injection. I
 
 Hooks and rules encourage relevant reads and confirmed writes; configuration alone does not prove that an agent has used the knowledge. Claude Code and Codex both use startup, prompt, and Stop hooks alongside project instructions. The CLI does not run an additional LLM, read conversation transcripts, or automatically turn discussion into facts. A Stop review may add one model continuation and associated latency/cost; the agent can finish without writing when there is no new knowledge.
 
+Brain knowledge follows the user's working language: Chinese conversations produce Chinese Page titles, knowledge and human-authored timeline descriptions; English conversations produce English knowledge, unless the user requests otherwise. English CLI prompts and repository documentation do not set the knowledge language. IDs, commands, code, URLs and verbatim evidence are preserved.
+
+Start each Page's current knowledge with one or two plain prose sentences stating what it records, the core conclusion and when to read it, before headings, dates, provenance or lists. Put the conclusion in the first sentence and keep it current when updating the body. The existing index extracts this opening; no summary field is added. This writing guidance is delivered through installed agent rules, hook recall context and the CLI MCP service. Existing installations receive updated hook context when running the new CLI; rerun `mmx connect --agent codex` or `mmx connect --agent claude-code` to refresh the installed rules, and restart the MCP service to refresh its instructions. CLI writes preserve submitted text and do not translate or rewrite it automatically.
+
 `doctor` checks files, executable paths, and recent hook receipts:
 
 - `retrieved`: retrieval completed, awaiting delivery.
