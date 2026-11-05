@@ -367,6 +367,7 @@ test('Codex setup upgrades instructions-only installs, preserves foreign hooks a
   assert.match(readFileSync(join(f.root, '.gitignore'), 'utf8'), /\/\.codex\/hooks\.json/);
   assert.equal(installed.hooks.SessionStart[0].hooks[0].additionalContextLimit, 10000);
   assert.equal(installed.hooks.Stop.at(-1).hooks[0].additionalContextLimit, undefined);
+  assert.equal(installed.hooks.Interrupt[0].hooks[0].additionalContextLimit, undefined);
   assert.equal(installed.description, 'User hooks');
   assert.deepEqual(installed.hooks.Stop[0], foreign.hooks.Stop[0]);
   for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop']) assert.ok(installed.hooks[event].some(group => group.hooks[0].command.includes('hook --agent codex')));

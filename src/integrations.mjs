@@ -34,8 +34,8 @@ function definitions(root, agent) {
     ['sessionStart', 'session-start'], ['beforeSubmitPrompt', 'prompt'], ['preToolUse', 'pre-tool'], ['stop', 'stop'],
   ].map(([event, operation]) => [event, [{ command: `${prefix} ${operation}`, ...(event === 'stop' ? { loop_limit: 1 } : {}) }]]));
   if (agent === 'claude-code' || agent === 'codex') return Object.fromEntries([
-    ['SessionStart', 'session-start'], ['UserPromptSubmit', 'prompt'], ['Stop', 'stop'],
-  ].map(([event, operation]) => [event, [{ hooks: [{ type: 'command', command: `${prefix} ${operation}`, timeout: 10, ...(agent === 'codex' && event !== 'Stop' ? { additionalContextLimit: 10000 } : {}) }] }]]));
+    ['SessionStart', 'session-start'], ['UserPromptSubmit', 'prompt'], ['Stop', 'stop'], ...(agent === 'codex' ? [['Interrupt', 'interrupt']] : []),
+  ].map(([event, operation]) => [event, [{ hooks: [{ type: 'command', command: `${prefix} ${operation}`, timeout: 10, ...(agent === 'codex' && ['SessionStart', 'UserPromptSubmit'].includes(event) ? { additionalContextLimit: 10000 } : {}) }] }]]));
   return {};
 }
 const commandOf = definition => definition.command || definition.hooks?.[0]?.command;

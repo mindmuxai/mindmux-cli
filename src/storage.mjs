@@ -33,7 +33,13 @@ export function projectRoot(start = process.cwd()) {
 export const preferencesPath = root => join(root, '.mindmux/preferences.json');
 export const preferences = root => readJson(preferencesPath(root), {});
 export function mergePreferences(root, patch) {
-  writeJson(preferencesPath(root), { ...preferences(root), version: 1, ...patch });
+  const previous = preferences(root), next = { ...previous, version: 1, ...patch };
+  const selection = prefs => JSON.stringify([prefs.cloudBrain?.enabled, prefs.cloudBrain?.brainId, prefs.brainRoot, prefs.mindmuxCli?.server]);
+  if (selection(previous) !== selection(next)) {
+    // A -> B -> A must not revive a token issued before the binding changed.
+    next.mindmuxCli = { ...next.mindmuxCli, bindingRevision: randomUUID() };
+  }
+  writeJson(preferencesPath(root), next);
 }
 export function serverUrl(value = DEFAULT_SERVER) {
   const url = new URL(value);

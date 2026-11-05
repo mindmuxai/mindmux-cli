@@ -7,6 +7,7 @@ import { withCloud, login, credentialPath } from './cloud.mjs';
 import { connect } from './integrations.mjs';
 import { runHook } from './hooks.mjs';
 import { recall } from './recall.mjs';
+import { reviewedWrite, finishReview } from './review.mjs';
 
 const HELP = `mmx — project Brain operations and agent integrations (v0.1.0)
 
@@ -38,6 +39,8 @@ Brain (JSON output, automatically uses the selected local/cloud Brain):
   cat decision.md | mmx brain update ID --expected-version VERSION --summary WHY [--source TEXT]
   mmx brain append ID --kind evidence --summary TEXT [--source TEXT]
   mmx brain archive ID
+  mmx brain review --review-token TOKEN --outcome saved|no-changes|already-covered|deferred --reason TEXT [--id ID]
+    Codex hooks supply the token. Pass it to Brain mutations with --review-token TOKEN.
   cat root.md | mmx brain update-root SLUG --expected-version VERSION
     New local/cloud root: --expected-version new. Existing roots require their current version.
 
@@ -51,7 +54,7 @@ Cloud discovery and low-level access:
 Run mmx without arguments in a terminal for the interactive menu.
 All commands accept --project PATH. No automatic cloud-to-local fallback.
 Cursor: startup context + prompt retrieval delivered at first tool call; one stop review.
-Claude Code: startup + prompt context; one stop review. Codex: startup + prompt context; one stop review after project/hook trust.
+Claude Code: startup + prompt context; one stop review. Codex: pre-answer review; Stop recovers a missing review once.
 `;
 
 async function stdin(limit = 1024 * 1024) {
@@ -72,7 +75,7 @@ function cloudVersion(value) {
 }
 
 export async function main(argv = process.argv.slice(2)) {
-  const options = Object.fromEntries(['project', 'agent', 'brain-id', 'server', 'workspace-id', 'name', 'description', 'id', 'title', 'category', 'status', 'source', 'expected-version', 'summary', 'kind', 'args'].map(key => [key, { type: 'string' }]));
+  const options = Object.fromEntries(['project', 'agent', 'brain-id', 'server', 'workspace-id', 'name', 'description', 'id', 'title', 'category', 'status', 'source', 'expected-version', 'summary', 'kind', 'args', 'review-token', 'outcome', 'reason'].map(key => [key, { type: 'string' }]));
   for (const key of ['local', 'online', 'no-open', 'confirm', 'help', 'version', 'yes', 'migrate', 'json', 'keep-login', 'include-external-data', 'fix']) options[key] = { type: 'boolean' };
   const { values: flags, positionals: pos } = parseArgs({ args: argv, options, allowPositionals: true, strict: true });
   if (flags.version) { console.log('0.1.0'); return; }
@@ -200,12 +203,16 @@ export async function main(argv = process.argv.slice(2)) {
     ignoreRuntime(root); output(binding(root)); return;
   }
   if (command === 'brain' && action === 'status') { output(binding(root)); return; }
+  if (command === 'brain' && action === 'review') {
+    output(await finishReview(root, { token: flags['review-token'], outcome: flags.outcome, reason: flags.reason, id: flags.id })); return;
+  }
   if (command === 'brain') {
     // Validate operation before opening a cloud connection.
     if (!['index', 'reindex', 'list', 'roots', 'read', 'read-root', 'search', 'recall', 'create', 'update', 'append', 'archive', 'update-root'].includes(action)) throw new Error('Unknown brain command. Run mmx help.');
     let content;
     if (['create', 'update', 'update-root'].includes(action)) content = await body();
     const result = await withBrain(root, async brain => {
+      const mutate = (resource, run) => reviewedWrite(root, flags['review-token'], brain, resource, run);
       switch (action) {
         case 'index': return brain.index();
         case 'reindex': return brain.reindex();
@@ -220,24 +227,24 @@ export async function main(argv = process.argv.slice(2)) {
           if (!/^[a-z0-9][a-z0-9-]*$/.test(id) || /[\r\n]/.test(title)) throw new Error('Invalid page id or multiline title.');
           if (!['project', 'concept', 'decision', 'person', 'reference'].includes(category)) throw new Error('Invalid page category.');
           if (flags.status && !['active', 'draft', 'archived'].includes(flags.status)) throw new Error('Invalid page status.');
-          return brain.create({ id, title, category, status: flags.status || 'active', compiledTruth: content, creationSummary: flags.source || 'Captured through MindMux CLI' });
+          return mutate({ kind: 'page', id }, () => brain.create({ id, title, category, status: flags.status || 'active', compiledTruth: content, creationSummary: flags.source || 'Captured through MindMux CLI' }));
         }
         case 'update': {
           const expected = need(flags['expected-version'], '--expected-version');
-          return brain.update({ id: need(rest[0], 'page id'), compiledTruth: content,
+          return mutate({ kind: 'page', id: need(rest[0], 'page id') }, () => brain.update({ id: rest[0], compiledTruth: content,
             expectedVersion: brain.target.kind === 'cloud' ? cloudVersion(expected) : expected,
-            timelineEntry: { kind: 'decision', summary: need(flags.summary, '--summary'), source: flags.source || 'MindMux CLI' } });
+            timelineEntry: { kind: 'decision', summary: need(flags.summary, '--summary'), source: flags.source || 'MindMux CLI' } }));
         }
         case 'append': {
           const kind = flags.kind || 'evidence';
           if (!['decision', 'evidence', 'reversal', 'note'].includes(kind)) throw new Error('Invalid timeline kind.');
-          return brain.append({ id: need(rest[0], 'page id'), entry: { kind, summary: need(flags.summary, '--summary'), source: flags.source || 'MindMux CLI' } });
+          return mutate({ kind: 'page', id: need(rest[0], 'page id') }, () => brain.append({ id: rest[0], entry: { kind, summary: need(flags.summary, '--summary'), source: flags.source || 'MindMux CLI' } }));
         }
-        case 'archive': return brain.archive(need(rest[0], 'page id'));
+        case 'archive': return mutate({ kind: 'page', id: need(rest[0], 'page id') }, () => brain.archive(rest[0]));
         case 'update-root': {
           const expected = need(flags['expected-version'], '--expected-version');
-          return brain.updateRoot({ slug: need(rest[0], 'root slug'), body: content,
-            expectedVersion: brain.target.kind === 'cloud' && expected !== 'new' ? cloudVersion(expected) : expected });
+          return mutate({ kind: 'root', id: need(rest[0], 'root slug') }, () => brain.updateRoot({ slug: rest[0], body: content,
+            expectedVersion: brain.target.kind === 'cloud' && expected !== 'new' ? cloudVersion(expected) : expected }));
         }
       }
     });

@@ -55,7 +55,9 @@ export function formatStatus(report) {
   const hook = report.receipts.find(item => item.status === 'emitted');
   lines.push(`MCP activity: ${call ? `${call.client} called ${call.tool} at ${call.time}` : 'No tool calls observed for the current setup'}`);
   lines.push(`Hook context: ${hook ? `Delivered to ${hook.agent} at ${hook.time}` : 'No delivery observed for the current setup'}`);
-  const failure = report.receipts.find(item => ['error', 'timeout'].includes(item.status));
+  const review = report.receipts.find(item => item.agent === 'codex' && ['stop', 'review', 'interrupt'].includes(item.event));
+  if (review) lines.push(`Codex memory review: ${review.status}${review.outcome ? ` (${review.outcome})` : ''} at ${review.time}`);
+  const failure = report.receipts.find(item => ['error', 'timeout', 'review-failed', 'recovery-exhausted', 'review-expired'].includes(item.status));
   if (failure) lines.push(`Recent issue: ${failure.agent || failure.client}: ${failure.error || failure.status}`);
   lines.push('', report.adoption);
   if (report.binding.kind === 'unbound') lines.push('Run mmx setup to get started.');

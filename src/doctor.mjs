@@ -33,6 +33,11 @@ export async function diagnose(root, flags = {}, dependencies = {}) {
   }
   if (report.live) check(report.live.accessible, report.live.accessible ? 'Brain access check passed.' : `Brain access failed: ${report.live.error}`, 'Check your network, login and Brain permissions; rerun mmx doctor --online.');
   if (report.mcpProbe) check(report.mcpProbe.connected, report.mcpProbe.connected ? 'MCP launch and recall check passed.' : `MCP check failed: ${report.mcpProbe.error}`, 'Run mmx doctor --fix to review the managed configuration.');
+  const review = report.receipts.find(item => item.agent === 'codex' && ['stop', 'review', 'interrupt'].includes(item.event));
+  if (review && ['review-failed', 'recovery-exhausted', 'review-expired', 'review-unavailable'].includes(review.status)) {
+    checks.push({ state: 'warning', message: `Codex memory review: ${review.status}.${review.error ? ` ${review.error}` : ''}`,
+      next: 'Inspect mmx status --json. Retry failed Brain operations; use current Codex hooks with session and turn identifiers. Never assume memory was saved.' });
+  }
   const warnings = [...legacyWarnings(root), ...report.integrations.filter(i => i.existingBrainMdHook).map(i => `${i.agent}: an existing brain.md hook may deliver duplicate context.`)];
   for (const message of warnings) checks.push({ state: 'warning', message, next: 'Review the existing integration before migrating it with mmx setup --migrate.' });
   let repair;

@@ -175,6 +175,8 @@ test('Cloud uses real SDK transport, validates binding, preserves expectedVersio
   let cloudRoot;
   let failCreate = false;
   let indexAvailable = false;
+  let cloudPageVersion = 3;
+  let loseWriteReadback = false;
   const server = createServer(async (req, res) => {
     if (req.headers.authorization !== 'Bearer test-access') { res.writeHead(401).end(); return; }
     let text = ''; for await (const chunk of req) text += chunk;
@@ -189,7 +191,7 @@ test('Cloud uses real SDK transport, validates binding, preserves expectedVersio
       register('reindex_brain', { brainId: z.string() }, () => ({ generated: true, body: '# Brain Index' }));
     }
     register('list_pages', { brainId: z.string() }, () => ({ pages: [{ id: 'cloud-auth', title: 'OAuth auth', status: 'active', version: 3, summary: 'OAuth' }] }));
-    register('read_page', { brainId: z.string(), id: z.string() }, () => ({ version: 3, page: { compiledTruth: 'OAuth with PKCE' } }));
+    register('read_page', { brainId: z.string(), id: z.string() }, () => ({ version: cloudPageVersion, page: { compiledTruth: 'OAuth with PKCE' } }));
     register('search_pages', { brainId: z.string(), query: z.string(), maxResults: z.number().optional() }, () => ({ pages: [] }));
     register('create_project', { workspaceId: z.string(), name: z.string(), description: z.string().optional() }, () => {
       if (failCreate) throw new Error('simulated lost creation response');
@@ -202,7 +204,10 @@ test('Cloud uses real SDK transport, validates binding, preserves expectedVersio
       cloudRoot = { version: (cloudRoot?.version || 0) + 1, rootPage: { slug: args.slug, body: args.body } };
       return cloudRoot;
     });
-    register('update_compiled_truth', { brainId: z.string(), id: z.string(), compiledTruth: z.string(), expectedVersion: z.number(), timelineEntry: z.object({ kind: z.string(), summary: z.string(), source: z.string() }) }, args => ({ version: args.expectedVersion + 1 }));
+    register('update_compiled_truth', { brainId: z.string(), id: z.string(), compiledTruth: z.string(), expectedVersion: z.number(), timelineEntry: z.object({ kind: z.string(), summary: z.string(), source: z.string() }) }, args => {
+      if (!loseWriteReadback) cloudPageVersion = args.expectedVersion + 1;
+      return { version: args.expectedVersion + 1 };
+    });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     sessions.add(transport);
     try { await mcp.connect(transport); await transport.handleRequest(req, res, text ? JSON.parse(text) : undefined); }
@@ -235,6 +240,22 @@ test('Cloud uses real SDK transport, validates binding, preserves expectedVersio
   assert.match(invalidVersion.stderr, /positive integer/);
   assert.equal((await cli(f, ['brain', 'update', 'cloud-auth', '--expected-version', '3', '--summary', 'confirmed'], 'Updated')).version, 4);
   assert.equal(calls.find(call => call.name === 'update_compiled_truth').args.brainId, 'chosen');
+  const reviewInput = { session_id: 'cloud-review', turn_id: 'one', prompt: '认证' };
+  const reviewContext = await cli(f, ['hook', '--agent', 'codex', 'prompt'], JSON.stringify(reviewInput));
+  const reviewToken = reviewContext.hookSpecificOutput.additionalContext.match(/--review-token ([a-f0-9]{64})/)[1];
+  await cli(f, ['brain', 'update', 'cloud-auth', '--review-token', reviewToken, '--expected-version', '4', '--summary', 'verified Cloud write'], 'Verified');
+  await cli(f, ['brain', 'update-root', 'background', '--review-token', reviewToken, '--expected-version', '2'], '# Background\nVerified root');
+  await cli(f, ['brain', 'review', '--review-token', reviewToken, '--outcome', 'saved', '--reason', 'Verified Page and root versions']);
+  assert.deepEqual(await cli(f, ['hook', '--agent', 'codex', 'stop'], JSON.stringify(reviewInput)), {});
+  const nextInput = { ...reviewInput, turn_id: 'two' };
+  const nextContext = await cli(f, ['hook', '--agent', 'codex', 'prompt'], JSON.stringify(nextInput));
+  const nextToken = nextContext.hookSpecificOutput.additionalContext.match(/--review-token ([a-f0-9]{64})/)[1];
+  loseWriteReadback = true;
+  const lost = await cli(f, ['brain', 'update', 'cloud-auth', '--review-token', nextToken, '--expected-version', '5', '--summary', 'lost read-back'], 'Lost', { fail: true });
+  assert.match(lost.stderr, /Write completed but verification failed/);
+  const denied = await cli(f, ['brain', 'review', '--review-token', nextToken, '--outcome', 'saved', '--reason', 'Must fail'], '', { fail: true });
+  assert.match(denied.stderr, /operation failed/);
+  loseWriteReadback = false;
   assert.ok((await cli(f, ['mcp', 'tools'])).tools.some(tool => tool.name === 'read_page'));
   await cli(f, ['brain', 'bind', '--brain-id', 'wrong', '--server', url], '', { fail: true });
   assert.equal((await cli(f, ['brain', 'status'])).brainId, 'chosen');
@@ -247,7 +268,7 @@ test('Cloud uses real SDK transport, validates binding, preserves expectedVersio
   const tools = await client.listTools();
   assert.equal(tools.tools.find(tool => tool.name === 'read_page').inputSchema.properties.brainId.const, 'chosen');
   const read = await client.callTool({ name: 'read_page', arguments: { id: 'cloud-auth' } });
-  assert.equal(JSON.parse(read.content[0].text).version, 3);
+  assert.equal(JSON.parse(read.content[0].text).version, cloudPageVersion);
   assert.equal((await client.callTool({ name: 'read_page', arguments: { id: 'cloud-auth', brainId: 'different' } })).isError, true);
   const failure = await client.callTool({ name: 'raw_failure', arguments: {} });
   assert.equal(failure.isError, true); assert.equal(failure.content[0].text, 'upstream failure preserved');
