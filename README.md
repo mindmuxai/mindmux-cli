@@ -4,16 +4,19 @@
 
 ## Install
 
-Requires **Node.js 22+** and **macOS or Linux**. Install from source with pnpm:
+Requires **Node.js 22+** and **macOS or Linux**.
 
 ```bash
-git clone https://github.com/mindmuxai/mindmux-cli.git
-cd mindmux-cli
-pnpm install
-pnpm add -g "$PWD"
+npm install -g @mindmux/cli
 ```
 
-Prefer npm? See [installation options](docs/installation.md).
+Or with pnpm:
+
+```bash
+pnpm add -g @mindmux/cli
+```
+
+See [installation options](docs/installation.md) for source installation and troubleshooting.
 
 ## Get started
 
