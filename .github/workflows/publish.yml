@@ -1,0 +1,64 @@
+name: Publish to npm
+
+# Manual release only: run on main and enter "publish" after reviewing the version.
+# Requires the NPM_TOKEN repository secret with publish access to @mindmux/cli.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "publish" to publish the package.json version to npm'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate release request
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" != 'refs/heads/main' ] || [ "$CONFIRM" != 'publish' ]; then
+            echo 'Run this workflow on main and enter publish to confirm.' >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          scope: '@mindmux'
+
+      - name: Ensure modern npm
+        run: npm install -g npm@latest && npm --version
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check and test
+        run: npm run check
+
+      - name: Preview package contents
+        run: npm pack --dry-run
+
+      - name: Check npm authentication
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo 'NPM_TOKEN repository secret is empty.' >&2
+            exit 1
+          fi
+          npm whoami --registry=https://registry.npmjs.org
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
