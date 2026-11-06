@@ -136,9 +136,9 @@ try {
   for (const agent of ['cursor', 'claude-code', 'codex']) {
     await check(`${agent} install, repeat install, remove, and reinstall`, async () => {
       await run(['connect', '--agent', agent]); await run(['connect', '--agent', agent]);
-      const report = await run(['doctor']); const integration = report.integrations.find(item => item.agent === agent);
+      const report = await run(['doctor', '--json']); const integration = report.integrations.find(item => item.agent === agent);
       assert.ok(integration.rulesPresent && integration.hookCommandsPresent && integration.executablePresent);
-      await run(['disconnect', '--agent', agent]); assert.ok(!(await run(['doctor'])).integrations.some(item => item.agent === agent));
+      await run(['disconnect', '--agent', agent]); assert.ok(!(await run(['doctor', '--json'])).integrations.some(item => item.agent === agent));
       await run(['connect', '--agent', agent]);
     });
   }
@@ -169,7 +169,7 @@ try {
     assert.deepEqual(await installedHook('claude-code', 'Stop', { ...input, stop_hook_active: true }), {});
   });
   await check('Online doctor records retrieval and delivery without a shadow local Brain', async () => {
-    const result = await run(['doctor', '--online']); assert.equal(result.live.accessible, true);
+    const result = await run(['doctor', '--online', '--json']); assert.equal(result.live.accessible, true);
     assert.ok(result.receipts.some(item => item.status === 'retrieved')); assert.ok(result.receipts.some(item => item.status === 'emitted'));
     assert.ok(!result.receipts.some(item => ['error', 'timeout'].includes(item.status)));
     assert.ok(!existsSync(join(projectDir, 'brain')));

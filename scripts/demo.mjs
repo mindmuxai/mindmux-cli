@@ -26,7 +26,7 @@ const delivered = run(['hook', 'pre-tool', '--agent', 'cursor'], input);
 const repeated = run(['hook', 'pre-tool', '--agent', 'cursor'], input);
 const stop = run(['hook', 'stop', '--agent', 'cursor'], input);
 const stopAgain = run(['hook', 'stop', '--agent', 'cursor'], input);
-const doctor = run(['doctor', '--online']);
+const doctor = run(['doctor', '--online', '--json']);
 const page = run(['brain', 'read', 'auth-pkce']);
 run(['brain', 'update', 'auth-pkce', '--expected-version', page.version, '--summary', 'Restrict the callback to loopback', '--source', 'Confirmed demo decision'], `${page.compiledTruth}\nThe OAuth callback listens only on 127.0.0.1.`);
 const updated = run(['brain', 'read', 'auth-pkce']);

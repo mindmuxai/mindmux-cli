@@ -1,325 +1,55 @@
 # MindMux CLI
 
-`mmx` connects local and Cloud Brains to coding agents. It provides explicit project binding, Brain operations, context retrieval, project-level MCP configuration, and agent integrations.
+`mmx` gives your coding agent a project Brain: persistent knowledge it can read while working and update as decisions settle. Connect Claude Code or Codex to a Cloud or local Brain with one setup command.
 
-Local operations reuse `@mindmux/brain-md`; Cloud operations use the official MCP TypeScript SDK. The npm package is `@mindmux/cli`, and the executable is `mmx`.
+## Install
 
-## Requirements
-
-- Node.js 22 or later.
-- macOS or Linux. Generated hook commands use POSIX shell quoting; native Windows shells are not supported yet.
-- A supported agent installed locally. Unified setup supports Claude Code and Codex. Cursor integration is available separately through `connect`.
-
-## Install from source
-
-Use Node.js 22 or later. With pnpm:
+Requires **Node.js 22+** and **macOS or Linux**. Install from source with pnpm:
 
 ```bash
 git clone https://github.com/mindmuxai/mindmux-cli.git
 cd mindmux-cli
 pnpm install
 pnpm add -g "$PWD"
+```
 
+Prefer npm? See [installation options](docs/installation.md).
+
+## Get started
+
+Inside the project you want to connect, run:
+
+```bash
 cd /path/to/your/project
 mmx setup
 ```
 
-If pnpm reports that its global bin directory is missing, run `pnpm setup`, reopen your terminal, and retry `pnpm add -g "$PWD"`. Source installation does not require a published `@mindmux/cli` package. Keep the source directory available for the installed command.
+Use the arrow keys and Enter to choose your agent, Workspace and Project, or create a new Project. Setup handles browser login, project MCP configuration, instructions and hooks, then checks the connection.
 
-With npm:
+**Restart your agent and approve its trust prompts.** In Codex, also review the installed hooks with `/hooks`. You can then work as usual: the agent receives relevant Brain context and is guided to save confirmed decisions. You do not need to mention Brain in every request.
 
-```bash
-git clone https://github.com/mindmuxai/mindmux-cli.git
-cd mindmux-cli
-npm ci
-npm install -g .
+Want a local Brain without Cloud login? Run `mmx setup --local` instead.
 
-cd /path/to/your/project
-mmx setup
-```
+## Everyday commands
 
-`npm ci` installs dependencies but does not install the global command. Keep the CLI installation and Node executable available: generated integrations use absolute paths. After moving the CLI, moving a project, or changing Node, rerun `mmx setup` to refresh those paths. Set up each new worktree separately.
+| Command | Purpose |
+| --- | --- |
+| `mmx` | Open the interactive menu |
+| `mmx status --online` | Check the connection |
+| `mmx doctor --fix` | Diagnose and repair setup |
+| `mmx switch` | Choose another Brain |
+| `mmx --help` | Show command help |
 
-The old `bin/mindmux.mjs` script remains as a compatibility entry point for existing integrations. New installations use `bin/mmx.mjs`.
+To start setup again, `mmx clean` resets local integration, binding, local Brain data and CLI login after confirmation. **Cloud data is kept.** Use `mmx clean --keep-login` to stay signed in. See [cleanup details](docs/setup.md#reset-for-testing).
 
-## Set up a project
+## Documentation
 
-Run `mmx setup` inside the project you want to connect.
-
-Use the Up/Down arrow keys and Enter to select agents, Workspaces, Projects, and confirmations. Select **+ Create a new Project** to create a Project; only its name requires typing. Empty, overlong, and duplicate names are validated in place so you can correct them without restarting. Cancelling creation returns to the Project menu; Ctrl+C exits setup.
-
-The wizard also handles browser login. It installs project-level MCP configuration and agent instructions/hooks, then performs a real stdio MCP handshake and a read-only recall check.
-
-Setup prints progress for login, discovery, validation, installation, and the MCP check. Progress goes to stderr and is suppressed with `--json`. Setup finishes with a short confirmation and instructions to restart your agent. For scripts or troubleshooting, use `mmx setup --json` to return the full structured result, including diagnostics and the backup path.
-
-Existing valid credentials and project bindings are reused. Repeating setup updates managed entries without registering duplicates. Browser authorization and the agent's own project, MCP, and hook trust prompts still require user interaction.
-
-Explicit options are available for automation:
-
-```bash
-# Connect an existing Cloud Brain.
-mmx setup --agent claude-code,codex --brain-id <brain-id> --yes
-
-# Create a Project visible to all members of the selected Workspace.
-mmx setup --agent codex --workspace-id <workspace-id> --name 'My Project' --confirm --yes
-
-# Use a local Brain without Cloud login.
-mmx setup --local --agent codex --yes
-
-mmx doctor --online
-mmx remove
-mmx remove --agent codex
-```
-
-`--yes` disables terminal questions. It does not bypass OAuth, agent trust prompts, or the `--confirm` requirement for Project creation. Non-interactive Cloud setup requires explicit agents and either an existing Cloud binding, a Brain ID, or Project creation options. `--no-open` prints the authorization URL instead of opening a browser.
-
-Claude Code uses the `mindmux` entry in `.mcp.json`, plus `CLAUDE.md` and hooks. Codex uses `mindmux_cli` in `.codex/config.toml`, plus `AGENTS.md` instructions and native hooks in `.codex/hooks.json`. These MCP identifiers remain unchanged by the executable rename. Generated MCP configuration contains executable paths and `MINDMUX_HOME`, rather than copied OAuth tokens. Restart the agent after setup and approve the applicable trust prompts.
-
-### Codex hook setup and upgrades
-
-The [official Codex hooks documentation](https://learn.chatgpt.com/docs/hooks) describes the host protocol and trust controls. Codex hooks require a compatible Codex installation with the `hooks` feature enabled. Setup checks `codex features list` and warns if support cannot be verified or hooks are disabled; it does not change global Codex settings. Doctor reports unsupported or disabled hooks as errors and unavailable capability checks as warnings. If needed, update Codex or run `codex features enable hooks`.
-
-For an existing instructions-only installation, rerun `mmx setup --agent codex` (add `--local` for a local Brain), or use `mmx doctor --fix`. Setup installs SessionStart, UserPromptSubmit, and Stop handlers in `.codex/hooks.json`, preserves unrelated hooks, and keeps `AGENTS.md` as workflow guidance. It does not change the brain.md storage implementation. Status and doctor detect older instructions-only installs as missing hooks. Setup adds `.codex/hooks.json` to the project's `.gitignore`; run setup in each worktree that needs these hooks.
-
-Restart Codex, trust the project, and open `/hooks` to review new or changed definitions. Codex skips untrusted hooks; the CLI does not approve hooks or alter Codex's trust records. Hooks may also exist in global or inline TOML configuration, so inspect `/hooks` for duplicates. `mmx remove --agent codex` removes the hooks installed by setup while preserving unrelated hook definitions; `mmx clean` also removes the managed hooks as part of its local reset.
-
-SessionStart injects base Brain context (including after resume/compaction); UserPromptSubmit retrieves relevant project knowledge. Stop requests at most one additional memory review per turn, and continuation prompts do not reset this guard. Writes still require the agent to identify confirmed durable knowledge and call the CLI/MCP. Hook failures are recorded and allow the task to proceed; no automatic Cloud-to-local fallback occurs. Use `mmx status` to inspect observed hook delivery, or `mmx doctor` to check installation and Codex hook capability; neither can verify that Codex trusted a definition or used the returned context.
-
-### Interactive menu
-
-Run `mmx` without arguments in a terminal to open the arrow-key menu. An unconfigured project offers setup first. Configured projects offer status, live connection checks, diagnosis and repair, Brain switching, and agent configuration. More options include removing selected agent connections and resetting local setup. Removal requires confirmation; local reset retains its own scope preview and confirmation. Actions return to the menu, and Ctrl+C or Exit closes it.
-
-`mmx --help` always prints command help. Running without arguments in a non-interactive environment, or with `--json` or `--yes`, prints help without waiting for input. Explicit subcommands remain available for scripts.
-
-### Diagnose and repair
-
-```bash
-mmx doctor                       # Readable local diagnostics; no network calls.
-mmx doctor --online              # Also check Brain access and MCP recall.
-mmx doctor --fix                 # Review the repair plan and confirm with arrow keys.
-mmx doctor --json                # Structured report, including the repair plan.
-mmx doctor --fix --yes --json     # Explicit non-interactive repair approval.
-```
-
-Doctor explains each problem and the suggested next action. Repair restores missing setup-managed entries and instructions/hooks, refreshes stale executable paths, and preserves unrelated configuration, the Brain binding, login, and Brain data. It backs up project configuration and runs an MCP recall check; a failed check rolls back configuration. Cloud repair can require browser login. Restart the configured agents after successful repair.
-
-Modified MCP entries, malformed configuration, unsafe paths, and conflicting integrations are not overwritten. If project files change after the repair plan is shown, repair stops so you can review a new plan. Connect-only integrations are diagnosed, but automatic repair requires a setup-managed installation. Use `mmx setup` for initial configuration. Diagnostics return a nonzero exit status while errors remain; warnings alone do not fail the command. Doctor output now defaults to text, so scripts should explicitly pass `--json`.
-
-### Check status and switch Brains
-
-```bash
-mmx status                  # Local configuration and observed activity; no network calls.
-mmx status --online         # Also check Brain access and the configured MCP launcher.
-mmx status --json           # Structured details for scripts.
-mmx switch                  # Choose a Workspace and Project with arrow keys.
-mmx switch --brain-id <brain-id> --yes
-mmx switch --local --yes
-```
-
-`status` distinguishes saved credentials, agent configuration, live read-only checks, successful MCP client tool calls, and hook context delivery. Successful setup is described as **Configured for**, because it does not establish that the agent has connected. Codex uses native lifecycle hooks alongside project instructions. Project-local hooks require a trusted project and review of each hook definition through `/hooks`. Neither a tool call nor delivered context proves that the model used the knowledge in its answer.
-
-Usage receipts are bounded to the most recent successful MCP tool call and each hook event. They record timestamps, client/tool/operation names and a binding fingerprint, without tool arguments or results. Setup and status probes do not count as agent activity. Status ignores receipts from a different binding or before the latest successful setup; it cannot observe calls made directly to a separate remote MCP connection or CLI.
-
-`switch` requires an existing `setup` installation and reuses all setup-managed agents. It keeps login credentials and Brain data. The selected Brain must pass validation and the MCP recall check; failures restore the previous binding and project configuration. Ctrl+C at a selection prompt cancels without changing the binding. Restart the agent after switching so its MCP server uses the new Brain.
-
-If Cloud Project creation succeeds but a later setup step fails, the error provides a command with that Brain ID to resume installation. The Cloud Project is retained. A local creation journal prevents a known creation from being replayed. If a creation request loses its response, inspect `mmx project list` before trying again; writes are never automatically retried.
-
-### Existing integrations and migration
-
-Codex merges global and project entries with the same name. The local transport therefore uses a separate name. Recognized global MindMux remote entries are disabled only in the current project through an `enabled = false` override; global configuration remains intact. Setup stops if a global `mindmux_cli` entry would conflict with the project transport.
-
-Use `mmx setup --migrate` to replace an existing project-level remote MCP entry. The original value is backed up and restored by `remove`. Initial TOML migration may reorder content or move comments; the complete original file is retained in the backup. Subsequent ordinary installs preserve unmanaged content. User-modified managed MCP entries are protected from replacement and removal.
-
-Migration also invokes the official brain.md project hook uninstaller for recognized legacy SessionStart hooks. Global brain.md skills and other global settings are reported but are not removed. Inspect custom aliases and higher-priority Claude local-scope entries in the agent itself.
-
-Configuration backups are stored under `~/.mindmux-cli/backups/` or `MINDMUX_HOME/backups/`, outside the project, with mode `0600`. Failed installation or self-check restores project configuration. Brain data and successfully created remote Projects survive rollback. A creation journal prevents blindly repeating a remote creation whose outcome is unknown; inspect `mmx project list` before retrying when instructed.
-
-`remove` removes setup-managed project integrations while retaining Brain data, binding, login, and unrelated configuration. For integrations installed only with `connect`, use `disconnect`.
-
-## Reset for testing
-
-Run `mmx clean` in the project to reset its local MindMux state. The arrow-key confirmation lists the cleanup scope before anything is removed.
-
-```bash
-mmx clean
-mmx setup
-
-# Reset the project while keeping CLI login.
-mmx clean --keep-login
-
-# Explicit confirmation for non-interactive scripts.
-mmx clean --yes --json
-```
-
-Cleanup removes managed MCP entries, instructions and hooks, project binding, session caches, local Brain data, and this project's configuration backups. By default, it also removes **all CLI login credentials and the saved server setting** from the current `MINDMUX_HOME`, which signs out other projects sharing that CLI login. `--keep-login` retains both. This removes local credentials; it does not revoke server grants or end a browser session.
-
-**Cloud Projects and Brains are always kept.** Existing cloud Projects can be selected in the next setup. Unrelated agent configuration, custom instructions, unknown preference fields, and other projects' backups are preserved. Empty generated files are removed, and an unchanged brain.md scaffold is removed with local Brain data. Git ignore rules are retained.
-
-Cleanup refuses modified managed MCP entries, unsafe paths, symbolic links, and active setup/write/authentication locks. Stop active agents before resetting. A configured local Brain outside the project requires `--include-external-data`; its path is shown in the confirmation. Local data deletion cannot be undone by `remove`.
-
-## Cloud login and binding
-
-```bash
-mmx login
-mmx workspace list
-mmx project list
-mmx brain discover
-
-mmx brain bind --brain-id <brain-id>
-mmx connect --agent claude-code
-mmx doctor --online
-```
-
-To create a Project explicitly:
-
-```bash
-mmx project create --workspace-id <workspace-id> --name 'My Project' --confirm
-mmx brain bind --brain-id <returned-brain-id>
-```
-
-New Projects are visible to all Workspace members and require the server's owner/admin permissions. The CLI never infers a Workspace or Brain from the directory name. Binding is saved only after access is verified.
-
-Login uses OAuth discovery, dynamic client registration, a loopback callback, state validation, and PKCE. The default server is `https://mcp.mindmux.ai/mcp`. `--server URL` accepts HTTPS or loopback HTTP for test deployments.
-
-The CLI maintains its own credentials rather than reading agent credentials. Credentials are isolated by server and stored in `~/.mindmux-cli/auth/` with mode `0600`. Set `MINDMUX_HOME` to use another directory. System keychain integration is not implemented. Calls and refreshes use a process lock; writes are not automatically replayed. Normal exits and SIGINT/SIGTERM release locks. After SIGKILL, an error identifies the lock directory that needs inspection.
-
-`mmx logout` removes this CLI's local credentials for the selected server. It does not revoke other clients' authorization. Binding uses `.mindmux/preferences.json`; unknown preference fields are preserved. Cloud failures never silently switch writes to a local Brain.
-
-## Brain operations
-
-Brain commands return JSON by default.
-
-```bash
-mmx brain status
-mmx brain index                    # Read the generated active-page index and root navigation.
-mmx brain reindex                  # Rebuild the derived index; requires write access.
-mmx brain list
-mmx brain search 'authentication'
-mmx brain recall 'implement authentication'
-mmx brain read auth-pkce
-
-cat decision.md | mmx brain create \
-  --id auth-pkce --title 'Use OAuth PKCE for authentication' \
-  --category decision --source 'Confirmed in the design review'
-
-cat revised.md | mmx brain update auth-pkce \
-  --expected-version <version-from-read> \
-  --summary 'Restrict the callback to loopback' --source 'Design review'
-
-mmx brain append auth-pkce --kind evidence --summary 'Interoperability verified' --source 'Test report'
-mmx brain archive auth-pkce
-mmx brain roots
-mmx brain read-root architecture
-cat architecture.md | mmx brain update-root architecture --expected-version <version-from-read>
-```
-
-Read the current version before updating. Local versions are file SHA-256 hashes; Cloud versions are positive server-side integers. Conflicts are not overwritten or retried automatically. For a new root, pass `--expected-version new`; existing roots require their current version.
-
-Local creation reuses brain.md's `create-page` and `update-truth` steps. An interruption between them may leave an empty page; read it and complete it with `update`. Atomic truth/timeline updates are provided by brain.md. The CLI's local write lock coordinates only this CLI, not other programs invoking `brain` directly.
-
-Choose local mode explicitly:
-
-```bash
-mmx init --local
-mmx brain bind --local
-```
-
-### Low-level MCP access
-
-```bash
-mmx mcp tools
-mmx mcp call TOOL --args '{"key":"value"}'
-mmx mcp serve
-```
-
-`mcp call` exposes the full Cloud MCP tool surface, including destructive tools. Supply all arguments, including the correct Brain ID: this low-level command does not inject the project binding. Use `brain` commands for ordinary operations against the selected Brain.
-
-`mcp serve` is a stdio service launched by the host, with no network listener. It shares CLI authentication and refresh locks. In Cloud mode it proxies the account's tools and results. Tools that accept `brainId` are pinned to the project binding and reject a different ID. Account-level tools such as Workspace discovery and Project creation retain their original arguments and server-side permissions; project binding is not an account permission sandbox.
-
-The additional `mindmux_brain` tool supports local and Cloud status, index, reindex, list, search, recall, read, create, update, append, archive, roots, read-root, and update-root operations. Bodies pass through stdin without shell interpolation. Cloud `isError`, content, and structured content are preserved. Restart the MCP service after changing a binding.
-
-## Agent behavior and limits
-
-| Agent | Session start | User request | End of turn |
-| --- | --- | --- | --- |
-| Claude Code | SessionStart context, including supported resume/compaction boundaries | UserPromptSubmit retrieval and injection | One Stop review, with recursion protection |
-| Codex | SessionStart hook + AGENTS.md; restores active review after compaction | UserPromptSubmit recall and pre-answer review | Stop allows a registered review; otherwise requests one recovery |
-| Cursor local agent | sessionStart base context | beforeSubmitPrompt retrieval; first preToolUse delivers relevant context | One stop follow-up, with `loop_limit=1` |
-
-Unified `setup` supports Claude Code and Codex. To install Cursor rules and hooks separately, first bind or initialize a Brain, then run:
-
-```bash
-mmx connect --agent cursor
-mmx disconnect --agent cursor
-```
-
-Cursor's beforeSubmitPrompt hook is used for retrieval, not context injection. Its sessionStart hook is fire-and-forget, and preToolUse may run after the first tool's arguments have already been constructed. A turn with no tool calls depends on startup context and persistent rules. Cloud agent VMs are outside the supported scope of this local integration.
-
-Hooks and rules encourage relevant reads and confirmed writes; configuration alone does not prove that an agent has used the knowledge. Claude Code and Codex both use startup, prompt, and Stop hooks alongside project instructions. The CLI does not run an additional LLM, read conversation transcripts, or automatically turn discussion into facts. Claude Code and Cursor may add one end-of-turn model continuation. Codex reviews memory before the final answer and registers the result locally; normal registered turns do not require a Stop continuation. A missing or failed review may still add one visible recovery and repeat the final answer. No extra LLM is run by the CLI, and these mechanisms do not guarantee that every durable fact is captured.
-
-Brain knowledge follows the user's working language: Chinese conversations produce Chinese Page titles, knowledge and human-authored timeline descriptions; English conversations produce English knowledge, unless the user requests otherwise. English CLI prompts and repository documentation do not set the knowledge language. IDs, commands, code, URLs and verbatim evidence are preserved.
-
-Start each Page's current knowledge with one or two plain prose sentences stating what it records, the core conclusion and when to read it, before headings, dates, provenance or lists. Put the conclusion in the first sentence and keep it current when updating the body. The existing index extracts this opening; no summary field is added. This writing guidance is delivered through installed agent rules, hook recall context and the CLI MCP service. Existing installations receive updated hook context when running the new CLI; rerun `mmx connect --agent codex` or `mmx connect --agent claude-code` to refresh the installed rules, and restart the MCP service to refresh its instructions. CLI writes preserve submitted text and do not translate or rewrite it automatically.
-
-Codex hooks supply a review token scoped to the project, bound Brain, session and turn. The agent passes `--review-token TOKEN` to `brain create`, `update`, `append`, `archive` and `update-root`, then registers the final review:
-
-```bash
-mmx brain review --review-token TOKEN --outcome saved --reason "Saved and verified the confirmed decision"
-mmx brain review --review-token TOKEN --outcome no-changes --reason "No new durable knowledge"
-mmx brain review --review-token TOKEN --outcome already-covered --id PAGE_ID --reason "The existing Page covers this decision"
-mmx brain review --review-token TOKEN --outcome deferred --reason "The Brain service is unavailable"
-```
-
-Use the actual token provided by the current hook. `saved` requires a successful mutation executed with that token and matching read-back versions of all recorded resources. Reading an arbitrary existing Page does not qualify as a saved write. `already-covered` checks that the referenced Page is readable; the agent remains responsible for assessing its relevance. `deferred` records a retryable failure and does not authorize Stop as a completed review. Later token-bearing writes invalidate a registered review. Direct Cloud tool calls and writes without a token cannot supply verified-write evidence; use the CLI or `mindmux_brain` facade for this workflow.
-
-The MCP equivalent uses `mindmux_brain` with `reviewToken` on mutations, followed by `operation: "review"`, `reviewToken`, `outcome`, `reason`, and `id` for `already-covered`. Review records are local metadata, never Brain Pages. Even a no-changes turn normally needs one local tool call. The review proves workflow completion, not that the agent's knowledge judgment is complete.
-
-Review tokens expire after 24 hours and are invalidated when the active turn or binding changes, on interruption, and when Stop closes the turn. Exact completed-review retries are idempotent until the next turn or expiry. Missing session/turn identifiers disable enforcement with `review-unavailable` diagnostics rather than reusing a default session. Compaction restores the active token and registration state. Session locks serialize state updates and write verification; a busy or abandoned lock fails with a diagnostic rather than being removed while another process may be using it. After confirming a crashed process is gone, remove its `.mindmux/cli/reviews/*.lock` directory to retry. Review state is ignored by Git and removed by `mmx clean`.
-
-Upgrade existing Codex installations with `mmx connect --agent codex` or `mmx doctor --fix`, restart Codex and review `/hooks`. The managed installation also handles interruption to invalidate the active review. Claude Code and Cursor retain their existing Stop behavior.
-
-`doctor` checks files, executable paths, and recent hook receipts:
-
-- `retrieved`: retrieval completed, awaiting delivery.
-- `emitted`: context returned through the hook protocol; adoption by the model is not established.
-- `review-requested`: one recovery requested for an unregistered Codex review, or the regular end-of-turn review for other agents.
-- `review-registered` / `review-completed`: a local review was registered / accepted by Stop.
-- `review-failed` / `recovery-exhausted`: review or persistence failed; one recovery could not complete it. No claim of saved memory is made.
-- `review-unavailable` / `review-expired` / `review-aborted`: enforcement lacks a valid active turn, the token expired, or the turn was interrupted.
-- `error` / `timeout`: a failure or the eight-second hook budget was exceeded. The task continues without switching Brains.
-
-Retrieval starts with the Brain index: Page IDs, titles, summaries, categories, lifecycle states and tags, plus root-page navigation. The hook receives a bounded preview of complete index rows, with an explicit `brain index` instruction when rows are omitted; there is no fixed 20-page cutoff. Keyword retrieval supplements this directory with up to three active Page bodies and two core roots within an 8 KiB UTF-8 budget. A zero-length `pageIds` means no Page body was selected, not that the index is empty. The agent should read relevant Pages identified from the index even when keyword matching returns nothing. Local and Cloud full-text matches remain candidates even when their short summaries do not repeat the query. Vector retrieval and semantic reranking are not implemented.
-
-`brain index` returns a current active-page navigation view as `body`, structured `pages`, `rootPages`, and `count`. Local reads report whether the actual `brain/index.md` file is present. That canonical brain.md file may contain explicitly labeled draft/archived entries; its raw contents are not exposed through the active index API or hooks. Local `brain reindex` uses brain.md's generator to rebuild that file. Page writes continue to maintain the local index through brain.md.
-
-Cloud reads use `read_brain_index`; `reindex_brain` regenerates and persists a derived Markdown snapshot. Reads expose saved snapshot cursor/staleness metadata, never obsolete snapshot text. The main `body` is generated from current source Pages so a saved snapshot never overrides current truth. Indexes are generated documents: edit source Pages, then regenerate rather than supplying arbitrary index text. The Cloud service needs migration `0028_brain_indexes.sql` and the updated MCP server before the new Cloud index tools are available. For an older Cloud server without `read_brain_index`, the CLI builds the same navigation view from Cloud `list_pages` and `list_root_pages`, retaining summaries and marking `source: page-list-compatibility`. A failed supported index read is propagated; no local Brain fallback occurs.
-
-Raw user prompts are not persisted. Session retrieval caches under `.mindmux/cli/sessions/` contain Brain content and are ignored by Git, with mode `0600`. Pending Cursor delivery expires after ten minutes; changing a binding invalidates reuse. Historical cache cleanup is manual.
-
-Managed instruction blocks and hook registration are idempotent. Disconnect removes owned entries while preserving user content, Brain data, other hooks, and skills. Malformed configuration or markers cause an error rather than being overwritten. `doctor` reports recognized duplicate brain.md integrations; use the original installer to remove older hooks or global skills when replacing them.
-
-## Development and verification
-
-```bash
-npm ci
-npm run check
-npm run demo
-npm pack --dry-run
-```
-
-The automated suite uses temporary projects, real MCP SDK transports, and a mock OAuth server. It covers local lifecycle operations, optimistic concurrency, binding isolation, setup rollback, configuration preservation, hook schemas, caching, PKCE, process interruption, and the `mmx` compatibility entry point. Chinese fixture text intentionally tests multilingual retrieval and byte preservation.
-
-The local demo writes `.demo/report.md` and `.demo/latest.json`. It simulates hook delivery without production access or launching an agent model.
-
-An opt-in integration script is available after login:
-
-```bash
-node scripts/verify-live.mjs --workspace-id <workspace-id> --confirm --output artifacts/live-run
-```
-
-This script writes to a dedicated test Project in the explicitly selected Workspace. It reuses a saved manifest, creates fresh test pages on each run, exercises Cloud operations and installed hook commands, and preserves reports and project data. A disposable page is deleted as part of the test. It does not launch a real agent model and never runs under `npm test`.
-
-Production test reports, credentials, local project configuration, demo output, and generated artifacts are excluded from this repository. Hook protocol tests do not establish model adoption; assess that separately with actual agent sessions. Cursor model sessions and additional provider configurations remain future validation work.
+- [Installation](docs/installation.md) — npm, pnpm and requirements.
+- [Setup and maintenance](docs/setup.md) — agent trust, upgrades, repair and cleanup.
+- [Brain commands](docs/brain.md) — query, write and index operations.
+- [Cloud login](docs/cloud.md) — authentication and binding.
+- [Agent behavior](docs/agents.md) — hooks, memory reviews and limits.
+- [Development](docs/development.md) — tests and verification.
 
 ## License
 
