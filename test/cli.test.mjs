@@ -43,6 +43,8 @@ test('mmx is the public command and previous absolute script paths still work', 
   const run = promisify(execFile);
   const current = await run(process.execPath, [bin, '--help']);
   assert.match(current.stdout, /^mmx —/);
+  assert.ok(current.stdout.includes(`(v${pkg.version})`));
+  assert.equal((await run(process.execPath, [bin, '--version'])).stdout.trim(), pkg.version);
   assert.match(current.stdout, /mmx setup/);
   const legacy = await run(process.execPath, [fileURLToPath(new URL('../bin/mindmux.mjs', import.meta.url)), '--help']);
   assert.equal(legacy.stdout, current.stdout);

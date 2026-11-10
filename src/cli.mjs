@@ -9,7 +9,7 @@ import { runHook } from './hooks.mjs';
 import { recall } from './recall.mjs';
 import { reviewedWrite, finishReview } from './review.mjs';
 
-const HELP = `mmx — project Brain operations and agent integrations (v0.1.0)
+const HELP = `mmx — project Brain operations and agent integrations (v0.1.1)
 
 Setup:
   mmx setup [--agent claude-code,codex]      login, choose Brain, install MCP + rules/hooks
@@ -78,7 +78,7 @@ export async function main(argv = process.argv.slice(2)) {
   const options = Object.fromEntries(['project', 'agent', 'brain-id', 'server', 'workspace-id', 'name', 'description', 'id', 'title', 'category', 'status', 'source', 'expected-version', 'summary', 'kind', 'args', 'review-token', 'outcome', 'reason'].map(key => [key, { type: 'string' }]));
   for (const key of ['local', 'online', 'no-open', 'confirm', 'help', 'version', 'yes', 'migrate', 'json', 'keep-login', 'include-external-data', 'fix']) options[key] = { type: 'boolean' };
   const { values: flags, positionals: pos } = parseArgs({ args: argv, options, allowPositionals: true, strict: true });
-  if (flags.version) { console.log('0.1.0'); return; }
+  if (flags.version) { console.log('0.1.1'); return; }
   if (flags.help || pos[0] === 'help' || (!pos.length && (!process.stdin.isTTY || !process.stderr.isTTY || flags.json || flags.yes))) { console.log(HELP); return; }
   const root = realpathSync(flags.project ? resolve(flags.project) : projectRoot());
   process.chdir(root);
