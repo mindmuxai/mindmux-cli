@@ -41,6 +41,17 @@ For an existing instructions-only installation, rerun `mmx setup --agent codex` 
 
 Restart Codex, trust the project, and open `/hooks` to review new or changed definitions. Codex skips untrusted hooks; the CLI does not approve hooks or alter Codex's trust records. Hooks may also exist in global or inline TOML configuration, so inspect `/hooks` for duplicates. `mmx remove --agent codex` removes the hooks installed by setup while preserving unrelated hook definitions; `mmx clean` also removes the managed hooks as part of its local reset.
 
+MindMux sets `statusMessage` on each Codex command handler, as supported by the [official hook configuration](https://learn.chatgpt.com/docs/hooks). In [Codex 0.162.0](https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/tui/src/bottom_pane/hooks_browser_view.rs), this field also supplies the title in `/hooks`; missing or blank values appear as “Unnamed hook.” MindMux's labels are:
+
+| Event | Label |
+| --- | --- |
+| SessionStart | MindMux: load Brain context |
+| UserPromptSubmit | MindMux: recall project knowledge |
+| Stop | MindMux: verify memory review |
+| Interrupt | MindMux: close interrupted review |
+
+If an older installation shows unnamed MindMux hooks, update the CLI and run `mmx connect --agent codex` in that project, then restart Codex and review `/hooks`. Repeating setup also refreshes these labels while preserving unrelated hooks. `mmx doctor --fix` restores named handlers when it repairs missing hooks; missing labels alone do not trigger repair. A reset is not required. Labels identify the handlers; they do not approve hook trust or prove that a hook ran.
+
 SessionStart injects base Brain context (including after resume/compaction); UserPromptSubmit retrieves relevant project knowledge. UserPromptSubmit supplies a token for the agent to register its memory review before answering. Stop silently accepts a registered review; otherwise it requests at most one recovery, and continuation prompts do not reset this guard. Interrupt invalidates the active review token. See [Agent behavior](agents.md) for the review protocol and failure limits. Writes still require the agent to identify confirmed durable knowledge and call the CLI/MCP. Hook failures are recorded and allow the task to proceed; no automatic Cloud-to-local fallback occurs. Use `mmx status` to inspect observed hook delivery, or `mmx doctor` to check installation and Codex hook capability; neither can verify that Codex trusted a definition or used the returned context.
 
 ## Interactive menu

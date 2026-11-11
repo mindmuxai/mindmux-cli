@@ -10,6 +10,12 @@ const BEGIN = '<!-- BEGIN mindmux-cli -->', END = '<!-- END mindmux-cli -->';
 const CURSOR_OWNER = '<!-- mindmux-cli managed rule file -->';
 const CURSOR_HEADER = '---\ndescription: Bound project Brain memory\nalwaysApply: true\n---\n';
 export const AGENTS = ['cursor', 'claude-code', 'codex'];
+const CODEX_STATUS_MESSAGES = {
+  SessionStart: 'MindMux: load Brain context',
+  UserPromptSubmit: 'MindMux: recall project knowledge',
+  Stop: 'MindMux: verify memory review',
+  Interrupt: 'MindMux: close interrupted review',
+};
 export function managedBlock(text, content) {
   const starts = text.split(BEGIN).length - 1, ends = text.split(END).length - 1;
   if (starts !== ends || starts > 1 || (starts && text.indexOf(END) < text.indexOf(BEGIN))) throw new Error('Malformed mindmux-cli instruction markers. Repair before continuing.');
@@ -35,7 +41,12 @@ function definitions(root, agent) {
   ].map(([event, operation]) => [event, [{ command: `${prefix} ${operation}`, ...(event === 'stop' ? { loop_limit: 1 } : {}) }]]));
   if (agent === 'claude-code' || agent === 'codex') return Object.fromEntries([
     ['SessionStart', 'session-start'], ['UserPromptSubmit', 'prompt'], ['Stop', 'stop'], ...(agent === 'codex' ? [['Interrupt', 'interrupt']] : []),
-  ].map(([event, operation]) => [event, [{ hooks: [{ type: 'command', command: `${prefix} ${operation}`, timeout: 10, ...(agent === 'codex' && ['SessionStart', 'UserPromptSubmit'].includes(event) ? { additionalContextLimit: 10000 } : {}) }] }]]));
+  ].map(([event, operation]) => [event, [{ hooks: [{
+    type: 'command', command: `${prefix} ${operation}`, timeout: 10,
+    // Codex also uses statusMessage as the handler title in /hooks.
+    ...(agent === 'codex' ? { statusMessage: CODEX_STATUS_MESSAGES[event] } : {}),
+    ...(agent === 'codex' && ['SessionStart', 'UserPromptSubmit'].includes(event) ? { additionalContextLimit: 10000 } : {}),
+  }] }]]));
   return {};
 }
 const commandOf = definition => definition.command || definition.hooks?.[0]?.command;
