@@ -206,7 +206,7 @@ test('Cloud uses real SDK transport, validates binding, preserves expectedVersio
       cloudRoot = { version: (cloudRoot?.version || 0) + 1, rootPage: { slug: args.slug, body: args.body } };
       return cloudRoot;
     });
-    register('update_compiled_truth', { brainId: z.string(), id: z.string(), compiledTruth: z.string(), expectedVersion: z.number(), timelineEntry: z.object({ kind: z.string(), summary: z.string(), source: z.string() }) }, args => {
+    register('update_compiled_truth', { brainId: z.string(), id: z.string(), compiledTruth: z.string(), expectedVersion: z.number(), changeKind: z.enum(['correction', 'substantive']), timelineEntry: z.object({ kind: z.string(), summary: z.string(), source: z.string() }).optional() }, args => {
       if (!loseWriteReadback) cloudPageVersion = args.expectedVersion + 1;
       return { version: args.expectedVersion + 1 };
     });
@@ -242,6 +242,7 @@ test('Cloud uses real SDK transport, validates binding, preserves expectedVersio
   assert.match(invalidVersion.stderr, /positive integer/);
   assert.equal((await cli(f, ['brain', 'update', 'cloud-auth', '--expected-version', '3', '--summary', 'confirmed'], 'Updated')).version, 4);
   assert.equal(calls.find(call => call.name === 'update_compiled_truth').args.brainId, 'chosen');
+  assert.equal(calls.find(call => call.name === 'update_compiled_truth').args.changeKind, 'substantive');
   const reviewInput = { session_id: 'cloud-review', turn_id: 'one', prompt: '认证' };
   const reviewContext = await cli(f, ['hook', '--agent', 'codex', 'prompt'], JSON.stringify(reviewInput));
   const reviewToken = reviewContext.hookSpecificOutput.additionalContext.match(/--review-token ([a-f0-9]{64})/)[1];
@@ -274,6 +275,29 @@ test('Cloud uses real SDK transport, validates binding, preserves expectedVersio
   assert.equal((await client.callTool({ name: 'read_page', arguments: { id: 'cloud-auth', brainId: 'different' } })).isError, true);
   const failure = await client.callTool({ name: 'raw_failure', arguments: {} });
   assert.equal(failure.isError, true); assert.equal(failure.content[0].text, 'upstream failure preserved');
+  const correction = await client.callTool({ name: 'mindmux_brain', arguments: {
+    operation: 'update', id: 'cloud-auth', expectedVersion: String(cloudPageVersion), changeKind: 'correction', body: 'Corrected current content',
+  } });
+  assert.ok(!correction.isError, JSON.stringify(correction));
+  assert.equal(calls.filter(call => call.name === 'update_compiled_truth').at(-1).args.changeKind, 'correction');
+  assert.equal(calls.filter(call => call.name === 'update_compiled_truth').at(-1).args.timelineEntry, undefined);
+  const substantive = await client.callTool({ name: 'mindmux_brain', arguments: {
+    operation: 'update', id: 'cloud-auth', expectedVersion: String(cloudPageVersion), changeKind: 'substantive', summary: 'New requirement', body: 'Updated requirement',
+  } });
+  assert.ok(!substantive.isError, JSON.stringify(substantive));
+  assert.equal(calls.filter(call => call.name === 'update_compiled_truth').at(-1).args.timelineEntry.summary, 'New requirement');
+  const mutationCount = () => calls.filter(call => call.name === 'update_compiled_truth').length;
+  const beforeInvalid = mutationCount();
+  for (const extra of [
+    ['--change-kind', 'unknown', '--summary', 'invalid'],
+    ['--change-kind', 'correction', '--summary', 'must not be dropped'],
+    ['--change-kind', 'correction', '--source', 'must not be dropped'],
+    ['--change-kind', 'substantive'],
+  ]) await cli(f, ['brain', 'update', 'cloud-auth', '--expected-version', String(cloudPageVersion), ...extra], 'Invalid', { fail: true });
+  assert.equal(mutationCount(), beforeInvalid);
+  const schema = tools.tools.find(tool => tool.name === 'mindmux_brain').inputSchema;
+  assert.deepEqual(schema.properties.changeKind.enum, ['correction', 'substantive']);
+  assert.match(tools.tools.find(tool => tool.name === 'mindmux_brain').description, /Never.*Timeline.*instead/i);
   await client.close();
   await cli(f, ['setup', '--agent', 'codex', '--workspace-id', 'workspace', '--name', 'Setup test', '--confirm', '--yes']);
   await cli(f, ['setup', '--agent', 'codex', '--workspace-id', 'workspace', '--name', 'Setup test', '--confirm', '--yes']);
@@ -361,6 +385,9 @@ test('writing guidance reaches installed rules, recall hooks and MCP without tra
     assert.match(text, /Chinese conversations produce Chinese knowledge; English conversations produce English knowledge/);
     assert.match(text, /before headings, dates, provenance or lists/);
     assert.match(text, /Do not infer the knowledge language from CLI prompts/);
+    assert.match(text, /Never append a conflicting Timeline note instead/);
+    assert.match(text, /--change-kind correction/);
+    assert.match(text, /Local brain.md supports substantive updates only/);
   };
   checkPolicy(readFileSync(join(f.project, 'AGENTS.md'), 'utf8'));
   const hook = await cli(f, ['hook', '--agent', 'codex', 'session-start'], JSON.stringify({ session_id: 'writing-policy-check' }));
@@ -380,4 +407,11 @@ test('writing guidance reaches installed rules, recall hooks and MCP without tra
   const index = await cli(f, ['brain', 'index']);
   assert.equal(index.pages.find(page => page.id === 'auth-choice').summary, '认证使用 OAuth，不在仓库保存 API Key。');
   assert.equal(index.pages.find(page => page.id === 'english-contract').summary, english.split('\n')[0]);
+});
+
+test('local correction fails clearly without changing body, Timeline or version', async t => {
+  const f = fixture(t); await cli(f, ['init', '--local']); const before = await seed(f);
+  const failed = await cli(f, ['brain', 'update', before.id, '--expected-version', before.version, '--change-kind', 'correction'], 'Corrected', { fail: true });
+  assert.match(failed.stderr, /correction.*Cloud|Cloud.*correction/);
+  assert.deepEqual(await cli(f, ['brain', 'read', before.id]), before);
 });
