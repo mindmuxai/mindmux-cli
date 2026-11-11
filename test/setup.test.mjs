@@ -389,6 +389,67 @@ test('Codex setup upgrades instructions-only installs, preserves foreign hooks a
 });
 
 
+test('Codex hook labels survive upgrades and clean reinstalls without replacing user hooks', async t => {
+  const f = fixture(t);
+  const hooksPath = join(f.root, '.codex/hooks.json'); mkdirSync(join(f.root, '.codex'));
+  const foreign = { description: 'User hooks', hooks: {
+    SessionStart: [{ hooks: [{ type: 'command', command: 'echo user-start', statusMessage: 'My session helper' }] }],
+    Stop: [{ hooks: [{ type: 'command', command: 'echo user-stop', statusMessage: 'My stop helper' }] }],
+  } };
+  writeJson(hooksPath, foreign);
+  const labels = {
+    SessionStart: 'MindMux: load Brain context',
+    UserPromptSubmit: 'MindMux: recall project knowledge',
+    Stop: 'MindMux: verify memory review',
+    Interrupt: 'MindMux: close interrupted review',
+  };
+  const owned = config => Object.entries(config.hooks).flatMap(([event, groups]) => groups.flatMap(group =>
+    group.hooks.filter(hook => hook.command.includes('hook --agent codex')).map(hook => ({ event, hook }))));
+  const checkLabels = () => {
+    const config = JSON.parse(readFileSync(hooksPath));
+    const hooks = owned(config);
+    assert.equal(hooks.length, 4);
+    for (const [event, label] of Object.entries(labels)) {
+      const matches = hooks.filter(item => item.event === event);
+      assert.equal(matches.length, 1);
+      assert.equal(matches[0].hook.statusMessage, label);
+      assert.equal(Object.hasOwn(matches[0].hook, 'name'), false);
+    }
+    assert.equal(config.description, foreign.description);
+    for (const event of Object.keys(foreign.hooks)) assert.deepEqual(config.hooks[event][0], foreign.hooks[event][0]);
+    return hooks.map(({ hook }) => hook.command);
+  };
+  const eraseLabels = () => {
+    const config = JSON.parse(readFileSync(hooksPath));
+    for (const { hook } of owned(config)) delete hook.statusMessage;
+    writeJson(hooksPath, config);
+  };
+  await cli(f, ['setup', '--local', '--agent', 'codex', '--yes']);
+  const commands = checkLabels();
+  eraseLabels();
+  await cli(f, ['connect', '--agent', 'codex']);
+  await cli(f, ['connect', '--agent', 'codex']);
+  assert.deepEqual(checkLabels(), commands);
+  eraseLabels();
+  await cli(f, ['setup', '--local', '--agent', 'codex', '--yes']);
+  assert.deepEqual(checkLabels(), commands);
+  eraseLabels();
+  const missing = JSON.parse(readFileSync(hooksPath));
+  delete missing.hooks.UserPromptSubmit;
+  writeJson(hooksPath, missing);
+  const repaired = await cli(f, ['doctor', '--fix', '--yes']);
+  assert.equal(repaired.repairResult.applied, true);
+  checkLabels();
+  await cli(f, ['clean', '--yes', '--json']);
+  assert.deepEqual(JSON.parse(readFileSync(hooksPath)), foreign);
+  assert.equal(existsSync(join(f.root, '.mindmux/cli')), false);
+  assert.equal(existsSync(join(f.root, '.mindmux/preferences.json')), false);
+  assert.equal(existsSync(join(f.root, 'brain')), false);
+  const reinstalled = await cli(f, ['setup', '--local', '--agent', 'codex', '--yes']);
+  assert.equal(reinstalled.mcp.recall, true);
+  checkLabels();
+});
+
 test('malformed Codex hooks fail before setup changes instructions or binding', async t => {
   const f = fixture(t); mkdirSync(join(f.root, '.codex'));
   const path = join(f.root, '.codex/hooks.json');
