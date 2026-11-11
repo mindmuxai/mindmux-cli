@@ -20,6 +20,7 @@ export async function runMenu(root, { prompts = createSetupPrompts(), run, write
           { name: 'Switch Brain', value: ['switch'] },
           { name: 'Set up or refresh agent connections', value: setupArgs },
         ] : []),
+        { name: 'Check for CLI updates', value: ['update'] },
         { name: 'More options', value: 'more' },
         { name: 'Exit', value: 'exit' },
       ]);
@@ -40,7 +41,11 @@ export async function runMenu(root, { prompts = createSetupPrompts(), run, write
           ]);
           if (agent && await prompts.confirm(`Remove ${agent} connections? Brain data, binding and login will be kept.`)) await run(['remove', '--agent', agent]);
         } else await run(extra);
-      } else await run(choice);
+      } else {
+        const result = await run(choice);
+        // The old process may reference files replaced by the update.
+        if (result?.status === 'updated') return;
+      }
     } catch (error) {
       if (error.name === 'ExitPromptError') return;
       write(`Unable to complete the action: ${error.message}`);

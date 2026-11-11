@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import { binding, preferences, mergePreferences, readJson, writeJson, writeAtomic, homeDir, DEFAULT_SERVER, serverUrl, ignoreRuntime } from './storage.mjs';
 import { login, credentialPath, withCloud } from './cloud.mjs';
-import { connect, integrationFiles, managedBlock } from './integrations.mjs';
+import { AGENTS, connect, integrationFiles, managedBlock } from './integrations.mjs';
 import { localCommand } from './brain.mjs';
 import { planHost, hostState, guardPath } from './host-config.mjs';
 import { probeMcp } from './mcp-server.mjs';
@@ -96,6 +96,39 @@ export function planRepair(root) {
       'Back up project configuration and verify MCP launch and Brain recall.'],
     note: 'Brain binding and data are kept. Cloud validation may require browser login. Restart the selected agents after repair.' };
 }
+// Refresh only entries already owned by this CLI. No login, discovery or Brain writes.
+export async function refreshIntegrations(root) {
+  const runtime = join(root, '.mindmux/cli'); guardPath(root, runtime);
+  if (!existsSync(runtime)) return { refreshed: false, agents: [] };
+  const lock = join(runtime, 'setup.lock');
+  try { mkdirSync(lock); } catch { throw new Error('Another setup/remove/refresh is active. Retry after it finishes.'); }
+  const cleanup = () => rmSync(lock, { recursive: true, force: true });
+  process.once('exit', cleanup);
+  try {
+    const manifest = readJson(setupPath(root), {});
+    const integrations = readJson(join(runtime, 'integrations.json'), {});
+    const setupAgents = Object.keys(manifest.agents || {});
+    const agents = [...new Set([...setupAgents, ...Object.keys(integrations)])];
+    if (!agents.length) return { refreshed: false, agents: [] };
+    if (agents.some(agent => !AGENTS.includes(agent)) || setupAgents.some(agent => !supported.includes(agent))) throw new Error('Unknown managed agent. Inspect the installation before refreshing.');
+    const plans = preflight(root, setupAgents, manifest, false, false, true);
+    const paths = [setupPath(root), join(runtime, 'integrations.json'), join(root, '.gitignore'),
+      ...agents.flatMap(agent => Object.values(integrationFiles(root, agent))), ...plans.map(({ plan }) => plan.path)];
+    const files = snapshot(root, [...new Set(paths)]);
+    return await transaction(root, files, async () => {
+      for (const agent of agents) connect(root, agent);
+      for (const { agent, plan } of plans) {
+        writeAtomic(plan.path, plan.content);
+        manifest.agents[agent] = plan.record;
+      }
+      if (setupAgents.length) writeJson(setupPath(root), { ...manifest, updatedAt: new Date().toISOString() });
+      return { refreshed: true, agents };
+    });
+  } finally {
+    process.removeListener('exit', cleanup); cleanup();
+  }
+}
+
 export async function applyRepair(root, plan, flags = {}, dependencies = {}) {
   const target = binding(root);
   return setup(root, { json: flags.json, yes: true, 'no-open': flags['no-open'], agent: plan.agents.join(','), ...(target.kind === 'local' ? { local: true } : {}) },

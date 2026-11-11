@@ -1,3 +1,4 @@
+import { VERSION } from './version.mjs';
 import { parseArgs } from 'node:util';
 import { resolve, join, basename } from 'node:path';
 import { existsSync, rmSync, realpathSync } from 'node:fs';
@@ -9,12 +10,13 @@ import { runHook } from './hooks.mjs';
 import { recall } from './recall.mjs';
 import { reviewedWrite, finishReview } from './review.mjs';
 
-const HELP = `mmx — project Brain operations and agent integrations (v0.1.1)
+const HELP = `mmx — project Brain operations and agent integrations (v${VERSION})
 
 Setup:
   mmx setup [--agent claude-code,codex]      login, choose Brain, install MCP + rules/hooks
   mmx setup --local --agent codex --yes     local Brain without Cloud login
   mmx setup --json                         return detailed setup results as JSON
+  mmx update [--check] [--yes] [--json]     check for releases or upgrade this global installation
   mmx status [--online] [--json]            show configuration and observed activity
   mmx switch [--brain-id ID | --local]      choose another Brain; keep login and data
   mmx clean [--keep-login] [--yes]           reset local setup and data; keep Cloud data
@@ -77,10 +79,10 @@ function cloudVersion(value) {
 }
 
 export async function main(argv = process.argv.slice(2)) {
-  const options = Object.fromEntries(['project', 'agent', 'brain-id', 'server', 'workspace-id', 'name', 'description', 'id', 'title', 'category', 'status', 'source', 'expected-version', 'change-kind', 'summary', 'kind', 'args', 'review-token', 'outcome', 'reason'].map(key => [key, { type: 'string' }]));
-  for (const key of ['local', 'online', 'no-open', 'confirm', 'help', 'version', 'yes', 'migrate', 'json', 'keep-login', 'include-external-data', 'fix']) options[key] = { type: 'boolean' };
+  const options = Object.fromEntries(['project', 'agent', 'brain-id', 'server', 'workspace-id', 'name', 'description', 'id', 'title', 'category', 'status', 'source', 'expected-version', 'change-kind', 'summary', 'kind', 'args', 'review-token', 'outcome', 'reason', 'manager'].map(key => [key, { type: 'string' }]));
+  for (const key of ['local', 'online', 'no-open', 'confirm', 'help', 'version', 'yes', 'migrate', 'json', 'keep-login', 'include-external-data', 'fix', 'check', 'refresh-integrations']) options[key] = { type: 'boolean' };
   const { values: flags, positionals: pos } = parseArgs({ args: argv, options, allowPositionals: true, strict: true });
-  if (flags.version) { console.log('0.1.1'); return; }
+  if (flags.version) { console.log(VERSION); return; }
   if (flags.help || pos[0] === 'help' || (!pos.length && (!process.stdin.isTTY || !process.stderr.isTTY || flags.json || flags.yes))) { console.log(HELP); return; }
   const root = realpathSync(flags.project ? resolve(flags.project) : projectRoot());
   process.chdir(root);
@@ -88,13 +90,29 @@ export async function main(argv = process.argv.slice(2)) {
     const { runMenu } = await import('./menu.mjs');
     await runMenu(root, { run: async args => {
       process.exitCode = 0;
-      await main(['--project', root, ...args]);
+      return main(['--project', root, ...args]);
     } });
     return;
   }
   const [command, action, ...rest] = pos;
   for (const key of ['title', 'summary', 'source']) {
     if (flags[key] && /[\r\n\0]/.test(flags[key])) throw new Error(`--${key} must be a single line without NUL characters.`);
+  }
+  if (command === 'update') {
+    if (action || rest.length) throw new Error('Run mmx update [--check] [--yes] [--json] [--manager npm|pnpm].');
+    if (flags['refresh-integrations']) {
+      if (flags.check || flags.manager) throw new Error('Integration refresh cannot be combined with update selection flags.');
+      const { refreshIntegrations } = await import('./setup.mjs');
+      const result = await refreshIntegrations(root);
+      if (flags.json) output(result);
+      else console.log(result.refreshed ? 'Managed integrations refreshed. Restart your agent.' : 'No managed integrations in this project.');
+      return;
+    }
+    const { update, formatUpdate } = await import('./update.mjs');
+    const result = await update(root, flags);
+    if (flags.json) output(result); else console.log(formatUpdate(result));
+    if (result.status === 'manual') process.exitCode = 1;
+    return result;
   }
   const selectedServer = () => serverUrl(flags.server || preferences(root).mindmuxCli?.server || readJson(join(homeDir(), 'config.json'), {}).server || DEFAULT_SERVER);
   if (command === 'clean') {
