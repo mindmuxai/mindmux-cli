@@ -36,7 +36,9 @@ Brain (JSON output, automatically uses the selected local/cloud Brain):
   mmx brain index | reindex
   mmx brain search QUERY | recall QUERY
   cat decision.md | mmx brain create --id ID --title TITLE --category decision [--status draft] [--source TEXT]
-  cat decision.md | mmx brain update ID --expected-version VERSION --summary WHY [--source TEXT]
+  cat decision.md | mmx brain update ID --expected-version VERSION [--change-kind substantive] --summary WHY [--source TEXT]
+  cat corrected.md | mmx brain update ID --expected-version VERSION --change-kind correction
+    Cloud corrections replace content without a Timeline entry. Local updates require a summary.
   mmx brain append ID --kind evidence --summary TEXT [--source TEXT]
   mmx brain archive ID
   mmx brain review --review-token TOKEN --outcome saved|no-changes|already-covered|deferred --reason TEXT [--id ID]
@@ -75,7 +77,7 @@ function cloudVersion(value) {
 }
 
 export async function main(argv = process.argv.slice(2)) {
-  const options = Object.fromEntries(['project', 'agent', 'brain-id', 'server', 'workspace-id', 'name', 'description', 'id', 'title', 'category', 'status', 'source', 'expected-version', 'summary', 'kind', 'args', 'review-token', 'outcome', 'reason'].map(key => [key, { type: 'string' }]));
+  const options = Object.fromEntries(['project', 'agent', 'brain-id', 'server', 'workspace-id', 'name', 'description', 'id', 'title', 'category', 'status', 'source', 'expected-version', 'change-kind', 'summary', 'kind', 'args', 'review-token', 'outcome', 'reason'].map(key => [key, { type: 'string' }]));
   for (const key of ['local', 'online', 'no-open', 'confirm', 'help', 'version', 'yes', 'migrate', 'json', 'keep-login', 'include-external-data', 'fix']) options[key] = { type: 'boolean' };
   const { values: flags, positionals: pos } = parseArgs({ args: argv, options, allowPositionals: true, strict: true });
   if (flags.version) { console.log('0.1.1'); return; }
@@ -231,9 +233,15 @@ export async function main(argv = process.argv.slice(2)) {
         }
         case 'update': {
           const expected = need(flags['expected-version'], '--expected-version');
+          const changeKind = flags['change-kind'] ?? 'substantive';
+          if (!['correction', 'substantive'].includes(changeKind)) throw new Error('--change-kind must be correction or substantive.');
+          if (changeKind === 'correction' && (flags.summary !== undefined || flags.source !== undefined)) throw new Error('A correction must omit --summary and --source; it does not add a Timeline entry.');
+          if (changeKind === 'correction' && brain.target.kind !== 'cloud') throw new Error('Timeline-free correction is supported only for Cloud Brain. Local brain.md updates require --change-kind substantive and --summary.');
+          const timeline = changeKind === 'substantive'
+            ? { timelineEntry: { kind: 'decision', summary: need(flags.summary, '--summary'), source: flags.source || 'MindMux CLI' } }
+            : {};
           return mutate({ kind: 'page', id: need(rest[0], 'page id') }, () => brain.update({ id: rest[0], compiledTruth: content,
-            expectedVersion: brain.target.kind === 'cloud' ? cloudVersion(expected) : expected,
-            timelineEntry: { kind: 'decision', summary: need(flags.summary, '--summary'), source: flags.source || 'MindMux CLI' } }));
+            expectedVersion: brain.target.kind === 'cloud' ? cloudVersion(expected) : expected, changeKind, ...timeline }));
         }
         case 'append': {
           const kind = flags.kind || 'evidence';

@@ -59,3 +59,11 @@ Cloud reads use `read_brain_index`; `reindex_brain` regenerates and persists a d
 Raw user prompts are not persisted. Session retrieval caches under `.mindmux/cli/sessions/` contain Brain content and are ignored by Git, with mode `0600`. Pending Cursor delivery expires after ten minutes; changing a binding invalidates reuse. Historical cache cleanup is manual.
 
 Managed instruction blocks and hook registration are idempotent. Disconnect removes owned entries while preserving user content, Brain data, other hooks, and skills. Malformed configuration or markers cause an error rather than being overwritten. `doctor` reports recognized duplicate brain.md integrations; use the original installer to remove older hooks or global skills when replacing them.
+
+### Updating current knowledge
+
+Agent rules, hook recall and MCP instructions require whole-Page replacement when current facts or requirements change. Read the full Page, preserve unrelated content, and remove obsolete claims from its current body. A Timeline note alone does not update knowledge.
+
+Use `--change-kind substantive --summary "Why it changed"` for durable changes (the type is the default for older commands). For Cloud typos, formatting or erroneous initial content, use `--change-kind correction` without `--summary`/`--source`; it preserves the Timeline. Local brain.md updates still require a summary and record a Timeline entry. Use `append` only for independent evidence or events. The `mindmux_brain` tool exposes the same choice as `changeKind`.
+
+After updating the CLI, rerun `mmx connect --agent codex` or `mmx connect --agent claude-code` to refresh existing managed rules and restart the MCP service. Hooks use the installed CLI's current recall guidance. No reset or Cloud data cleanup is needed.
