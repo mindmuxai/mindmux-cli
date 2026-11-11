@@ -1,3 +1,4 @@
+import { VERSION } from './version.mjs';
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
@@ -88,7 +89,7 @@ export async function withCloud(server, run) {
   return withAuthLock(server, async () => {
     const provider = new AuthProvider(server);
     if (!provider.tokens()) throw new Error(`Cloud login required. Run mmx login --server ${server}.`);
-    const client = new Client({ name: 'mindmux-cli', version: '0.1.1' });
+    const client = new Client({ name: 'mindmux-cli', version: VERSION });
     const transport = new StreamableHTTPClientTransport(new URL(server), { authProvider: provider,
       fetch: timedFetch, reconnectionOptions: { maxRetries: 0 } });
     try {
