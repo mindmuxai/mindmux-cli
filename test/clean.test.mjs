@@ -50,12 +50,14 @@ test('clean resets local setup, data, caches, project backups and login while pr
 
 test('clean removes a Cloud binding without network access and can keep login and unknown preferences', async t => {
   const f = fixture(t); login(f);
+  put(join(f.home, 'update-check.json'), { checkedAt: Date.now() });
   put(join(f.root, '.mindmux/preferences.json'), { version: 1, cloudBrain: { enabled: true, brainId: 'remote-brain' }, mindmuxCli: { server: 'https://unreachable.invalid/mcp' }, otherSetting: true });
   const result = await run(f, 'clean', '--keep-login', '--yes');
   assert.equal(result.cloudDataDeleted, false); assert.equal(result.signedOut, false);
   assert.deepEqual(JSON.parse(readFileSync(join(f.root, '.mindmux/preferences.json'))), { version: 1, otherSetting: true });
   assert.ok(existsSync(join(f.home, 'auth/test.json')));
   assert.ok(existsSync(join(f.home, 'config.json')));
+  assert.equal(existsSync(join(f.home, 'update-check.json')), false);
   assert.equal((await run(f, 'brain', 'status')).kind, 'unbound');
 });
 
@@ -130,4 +132,79 @@ test('clean preserves unrelated Codex hooks while removing managed lifecycle han
   assert.equal(JSON.parse(readFileSync(path)).hooks.Stop.length, 2);
   await run(f, 'clean', '--yes');
   assert.deepEqual(JSON.parse(readFileSync(path)), foreign);
+});
+
+test('clean removes owned handlers anywhere in mixed hook groups and preserves foreign group metadata', async t => {
+  const f = fixture(t);
+  await run(f, 'setup', '--local', '--agent', 'claude-code,codex', '--yes');
+  for (const path of ['.codex/hooks.json', '.claude/settings.json']) {
+    const file = join(f.root, path), config = JSON.parse(readFileSync(file));
+    const expected = {};
+    for (const [event, groups] of Object.entries(config.hooks)) {
+      const owned = groups[0].hooks[0];
+      const foreign = { type: 'command', command: `echo user-${event}` };
+      const metadata = { matcher: 'keep-matcher', extra: 'keep-metadata' };
+      // Cover ownership as the first and last handler, including duplicate CLI handlers.
+      const hooks = event === 'Stop' ? [foreign, owned, owned] : [owned, foreign];
+      config.hooks[event] = [{ ...metadata, hooks }];
+      expected[event] = [{ ...metadata, hooks: [foreign] }];
+    }
+    config.hooks.CustomEvent = [{ hooks: [] }]; expected.CustomEvent = [{ hooks: [] }];
+    config.unrelated = true;
+    put(file, config);
+    f[path] = { hooks: expected, unrelated: true };
+  }
+  await run(f, 'clean', '--yes');
+  for (const path of ['.codex/hooks.json', '.claude/settings.json']) {
+    assert.deepEqual(JSON.parse(readFileSync(join(f.root, path))), f[path]);
+  }
+});
+
+test('clean recovers hook ownership from setup when integration receipt is missing, including old launch paths', async t => {
+  const f = fixture(t);
+  await run(f, 'setup', '--local', '--agent', 'claude-code,codex', '--yes');
+  const setupPath = join(f.root, '.mindmux/cli/setup.json');
+  const setup = JSON.parse(readFileSync(setupPath));
+  const oldBin = join(f.dir, 'previous-install/bin/mmx.mjs');
+  for (const record of Object.values(setup.agents)) record.installed.args[0] = oldBin;
+  put(setupPath, setup);
+  for (const path of ['.codex/hooks.json', '.claude/settings.json', '.codex/config.toml', '.mcp.json']) {
+    const file = join(f.root, path);
+    put(file, readFileSync(file, 'utf8').replaceAll(bin, oldBin));
+  }
+  rmSync(join(f.root, '.mindmux/cli/integrations.json'));
+  await run(f, 'clean', '--yes');
+  for (const path of ['.codex/hooks.json', '.claude/settings.json', '.codex/config.toml', '.mcp.json']) assert.equal(existsSync(join(f.root, path)), false, path);
+});
+
+test('clean clears update and OAuth session caches, keeps other project state, and permits Agent setup again', async t => {
+  const f = fixture(t);
+  await run(f, 'setup', '--local', '--agent', 'claude-code,codex', '--non-interactive');
+  login(f);
+  put(join(f.home, 'update-check.json'), { latest: '9.0.0', checkedAt: Date.now() });
+  put(join(f.home, 'auth/login-' + '0'.repeat(64) + '.json'), { status: 'authorized', server: 'https://example.com/mcp' });
+  const other = join(f.dir, 'other-project/.mindmux/preferences.json'); put(other, { cloudBrain: { enabled: true, brainId: 'other' } });
+  await run(f, 'clean', '--yes');
+  assert.equal(existsSync(join(f.home, 'auth')), false);
+  assert.equal(existsSync(join(f.home, 'update-check.json')), false);
+  assert.equal(JSON.parse(readFileSync(other)).cloudBrain.brainId, 'other');
+  for (const path of ['AGENTS.md', 'CLAUDE.md', '.codex/hooks.json', '.claude/settings.json', '.codex/config.toml', '.mcp.json', '.mindmux/cli']) assert.equal(existsSync(join(f.root, path)), false, path);
+  const waiting = await run(f, 'setup', '--non-interactive');
+  assert.equal(waiting.step, 'select_agent'); assert.equal(waiting.installed, false);
+  const ready = await run(f, 'setup', '--local', '--agent', 'claude-code,codex', '--non-interactive');
+  assert.equal(ready.status, 'ready'); assert.equal(ready.mcp.recall, true);
+  assert.equal((await run(f, 'doctor', '--online')).healthy, true);
+});
+
+test('clean refuses an active updater and missing MCP ownership metadata before deleting anything', async t => {
+  const f = fixture(t);
+  await run(f, 'setup', '--local', '--agent', 'codex', '--yes'); login(f);
+  mkdirSync(join(f.home, 'update.lock'));
+  await assert.rejects(run(f, 'clean', '--yes'), /CLI update is active/);
+  rmSync(join(f.home, 'update.lock'), { recursive: true });
+  rmSync(join(f.root, '.mindmux/cli/setup.json'));
+  await assert.rejects(run(f, 'clean', '--yes'), /ownership record is missing/);
+  assert.ok(existsSync(join(f.root, '.codex/hooks.json')));
+  assert.ok(existsSync(join(f.root, 'brain/index.md')));
+  assert.ok(existsSync(join(f.home, 'auth/test.json')));
 });

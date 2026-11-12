@@ -218,7 +218,7 @@ test('cancelling creation returns to the Project menu and can bind an existing P
     choose: async (message, choices) => {
       if (message.includes('Workspace')) return choices[0].value;
       projectMenus++;
-      return choices[projectMenus === 1 ? 0 : 1].value;
+      return choices.find(choice => choice.value.kind === (projectMenus === 1 ? 'create' : 'existing')).value;
     },
     projectName: async () => 'Cancelled Project',
     confirm: async () => false,
@@ -272,7 +272,7 @@ test('switch uses menus with existing agents, keeps login and data, and restores
   const savedLogin = readFileSync(credential, 'utf8');
   const dataPath = join(f.root, 'brain/index.md'); const savedData = readFileSync(dataPath, 'utf8');
   const prompts = { agents: async () => { throw new Error('Should reuse agents'); },
-    choose: async (message, choices) => choices[message.includes('Workspace') ? 0 : 1].value };
+    choose: async (message, choices) => choices.find(choice => message.includes('Workspace') || choice.value.kind === 'existing').value };
   const login = async () => { throw new Error('Should reuse login'); };
   const result = await switchBrain(f.root, { json: true }, { ...flow, prompts, login });
   assert.equal(result.binding.brainId, 'next-brain');

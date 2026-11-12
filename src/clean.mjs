@@ -1,10 +1,12 @@
+import { removeStaleLoginLaunchLock } from './login-lock.mjs';
+import { pendingLogin } from './login-session.mjs';
 import { existsSync, lstatSync, readFileSync, readdirSync, mkdirSync, rmSync, rmdirSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { homeDir, preferences, preferencesPath, readJson, writeJson } from './storage.mjs';
 import { AGENTS, connect, integrationFiles, managedBlock } from './integrations.mjs';
-import { guardPath, planHost } from './host-config.mjs';
+import { guardPath, planHost, hostState } from './host-config.mjs';
 import { removeSetup } from './setup.mjs';
 import { brainPackage } from './brain.mjs';
 import { createSetupPrompts } from './prompts.mjs';
@@ -27,9 +29,19 @@ function cleanPlan(root, flags) {
   const prefs = preferences(root);
   const setup = readJson(join(runtime, 'setup.json'), {});
   const integrations = readJson(join(runtime, 'integrations.json'), {});
-  const agents = [...new Set([...Object.keys(setup.agents || {}), ...Object.keys(integrations)])];
+  const markedAgents = AGENTS.filter(agent => {
+    const { rules } = integrationFiles(root, agent); guardPath(root, rules);
+    return existsSync(rules) && readFileSync(rules, 'utf8').includes('<!-- BEGIN mindmux-cli -->');
+  });
+  const agents = [...new Set([...Object.keys(setup.agents || {}), ...Object.keys(integrations), ...markedAgents])];
   for (const agent of agents) {
     if (!AGENTS.includes(agent)) throw new Error(`Unknown integration in cleanup manifest: ${agent}`);
+    if (agent !== 'cursor' && !setup.agents?.[agent]) {
+      const state = hostState(root, agent), args = state.entry?.args;
+      if (state.text.includes('# BEGIN mindmux-cli MCP') || (Array.isArray(args) && args.length === 5 && args[1] === '--project' && args[2] === root && args[3] === 'mcp' && args[4] === 'serve')) {
+        throw new Error(`Setup ownership record is missing for ${state.path}. Restore .mindmux/cli/setup.json from its configuration backup before cleaning; the original MCP configuration cannot be inferred safely.`);
+      }
+    }
     if (setup.agents?.[agent]) planHost(root, agent, setup.agents[agent], { remove: true });
     const files = integrationFiles(root, agent);
     for (const file of Object.values(files)) guardPath(root, file);
@@ -47,7 +59,7 @@ function cleanPlan(root, flags) {
     if (!existsSync(join(path, 'index.md')) || !readFileSync(join(path, 'index.md'), 'utf8').startsWith('# Brain Index')) throw new Error(`Refusing to delete an unrecognized Brain directory: ${path}`);
   }
   const backup = join(home, 'backups', createHash('sha256').update(root).digest('hex'));
-  const paths = [preferencesPath(root), runtime, backup, ...data];
+  const paths = [preferencesPath(root), runtime, backup, join(home, 'update-check.json'), ...data];
   if (!flags['keep-login']) paths.push(join(home, 'auth'), join(home, 'config.json'));
   for (const path of paths) noSymlinks(path);
   return { root, home, runtime, prefs, setup, agents, data, backup };
@@ -55,6 +67,7 @@ function cleanPlan(root, flags) {
 
 export async function clean(root, flags = {}, dependencies = {}) {
   const plan = cleanPlan(root, flags);
+  if (!flags['keep-login'] && pendingLogin()) throw new Error('Browser authorization is pending. Complete it or wait for it to expire before clearing login.');
   const interactive = Boolean(dependencies.prompts || (process.stdin.isTTY && process.stderr.isTTY));
   if (!flags.yes) {
     if (!interactive) throw new Error('clean deletes local data. Run interactively or pass --yes to confirm.');
@@ -73,7 +86,18 @@ export async function clean(root, flags = {}, dependencies = {}) {
   const current = cleanPlan(root, flags);
   if (JSON.stringify(current) !== JSON.stringify(plan)) throw new Error('Configuration changed during confirmation. Run clean again.');
   if (existsSync(join(plan.runtime, 'write.lock'))) throw new Error('A local Brain write is active. Finish it before running clean.');
-  if (!flags['keep-login'] && existsSync(join(plan.home, 'auth')) && readdirSync(join(plan.home, 'auth')).some(name => name.endsWith('.lock'))) throw new Error('CLI authentication is busy. Stop active agents or finish login before running clean.');
+  if (existsSync(join(plan.home, 'update.lock'))) throw new Error('A CLI update is active. Finish it before running clean.');
+  if (!flags['keep-login']) {
+    // Authorization may have started while the confirmation prompt was open.
+    if (pendingLogin()) throw new Error('Browser authorization is pending. Complete it or wait for it to expire before clearing login.');
+    const auth = join(plan.home, 'auth');
+    if (existsSync(auth)) {
+      for (const name of readdirSync(auth)) {
+        if (/^login-[a-f0-9]{64}\.json\.launch\.lock$/.test(name)) removeStaleLoginLaunchLock(join(auth, name));
+      }
+      if (readdirSync(auth).some(name => name.endsWith('.lock'))) throw new Error('CLI authentication is busy. Stop active agents or finish login before running clean.');
+    }
+  }
   mkdirSync(plan.runtime, { recursive: true, mode: 0o700 });
   const lock = join(plan.runtime, 'setup.lock');
   try { mkdirSync(lock); } catch { throw new Error(`Another setup/remove/clean is active: ${lock}`); }
@@ -104,6 +128,7 @@ export async function clean(root, flags = {}, dependencies = {}) {
     if (plan.data.length && existsSync(scaffold) && readFileSync(scaffold, 'utf8') === readFileSync(original, 'utf8')) rmSync(scaffold);
     for (const path of plan.data) rmSync(path, { recursive: true, force: true });
     rmSync(plan.backup, { recursive: true, force: true });
+    rmSync(join(plan.home, 'update-check.json'), { force: true });
     if (!flags['keep-login']) {
       rmSync(join(plan.home, 'auth'), { recursive: true, force: true });
       rmSync(join(plan.home, 'config.json'), { force: true });

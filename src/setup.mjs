@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, mkdirSync, rmSync, statSync, chmodSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID, createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -12,9 +12,19 @@ import { planHost, hostState, guardPath } from './host-config.mjs';
 import { probeMcp } from './mcp-server.mjs';
 import { inspectCodexHooks } from './codex-hooks.mjs';
 import { createSetupPrompts } from './prompts.mjs';
+import { startLoginSession, publicLoginState } from './login-session.mjs';
 
 const supported = ['claude-code', 'codex'];
 const setupPath = root => join(root, '.mindmux/cli/setup.json');
+export function suggestedProjectName(root, projects = []) {
+  const base = (basename(root).replace(/[\x00-\x1f\x7f]/g, ' ').trim() || 'My Project').slice(0, 200);
+  const names = new Set(projects.map(project => project.name.trim().toLowerCase()));
+  if (!names.has(base.toLowerCase())) return base;
+  for (let n = 2; ; n++) {
+    const suffix = ` (${n})`, candidate = base.slice(0, 200 - suffix.length).trimEnd() + suffix;
+    if (!names.has(candidate.toLowerCase())) return candidate;
+  }
+}
 function agentsFrom(value) {
   const agents = [...new Set((value || '').split(',').map(x => x.trim()).filter(Boolean))];
   if (agents.some(x => !supported.includes(x))) throw new Error('setup supports --agent claude-code,codex.');
@@ -149,7 +159,11 @@ export async function setup(root, flags = {}, dependencies = {}) {
     stage = message;
     if (!flags.json) process.stderr.write(`• ${message}…\n`);
   };
-  const interactive = !flags.yes && Boolean(dependencies.prompts || (process.stdin.isTTY && process.stderr.isTTY));
+  const machine = Boolean(flags['non-interactive']);
+  const inputRequired = (step, extra = {}) => ({ status: 'input_required', installed: false, step, project: root,
+    interaction: { preferred: 'host-native-choice', fallback: 'conversation',
+      guidance: 'Use an available and permitted host question tool (Claude Code: AskUserQuestion; Codex: request_user_input or request_user_input_async). Respect tool option limits; paginate long lists without hiding choices. If unavailable or unsuitable, ask one concise conversational question. Do not change host settings or modes automatically. Do not repeat a question already presented by the tool.' }, ...extra });
+  const interactive = !machine && !flags.yes && Boolean(dependencies.prompts || (process.stdin.isTTY && process.stderr.isTTY));
   const prompts = dependencies.prompts || createSetupPrompts();
   const cloud = dependencies.cloud || withCloud;
   const runtime = join(root, '.mindmux/cli'); guardPath(root, runtime);
@@ -163,6 +177,7 @@ export async function setup(root, flags = {}, dependencies = {}) {
   try {
     let agents = agentsFrom(flags.agent);
     if (!agents.length) {
+      if (machine) return inputRequired('select_agent', { choices: supported.map(id => ({ id, name: id })), next: 'Rerun setup with --agent using the current host agent; do not configure unrelated hosts.' });
       if (!interactive) throw new Error('Specify --agent claude-code,codex in a non-interactive terminal.');
       const installed = supported.filter(name => { try { execFileSync('/usr/bin/which', [name === 'claude-code' ? 'claude' : name], { stdio: 'ignore' }); return true; } catch { return false; } });
       agents = agentsFrom(await prompts.agents(installed));
@@ -176,6 +191,7 @@ export async function setup(root, flags = {}, dependencies = {}) {
     let plans;
     try { plans = preflight(root, agents, manifest, migrate, false, Boolean(dependencies.repair)); }
     catch (error) {
+      if (machine && !migrate && error.message.includes('--migrate')) return inputRequired('confirm_migration', { message: error.message, next: 'Ask the user before retrying with --migrate. Existing configuration will be backed up.' });
       if (!interactive || migrate || !error.message.includes('--migrate')) throw error;
       migrate = await prompts.confirm(`${error.message}\nReplace and back up the existing MCP configuration?`);
       if (!migrate) throw error;
@@ -212,11 +228,17 @@ export async function setup(root, flags = {}, dependencies = {}) {
     };
     if (!flags.local) {
       step('Checking Cloud login');
-      if (!readJson(credentialPath(server), {}).tokens) await (dependencies.login || login)(server, { open: !flags['no-open'] });
+      const authorization = async () => inputRequired('authorize', { authorization: publicLoginState(await (dependencies.startLogin || startLoginSession)(server)), pollAfterMs: 1000,
+        next: 'Open/show the authorization URL once. While pending, wait before polling the same setup command; after the user approves, allow callback processing time before asking again. Retry with login --non-interactive --json only after failure. Never request tokens in chat.' });
+      if (!readJson(credentialPath(server), {}).tokens) {
+        if (machine) return await authorization();
+        await (dependencies.login || login)(server, { open: !flags['no-open'] });
+      }
       // Authenticate/refresh through a harmless real request. Do not start browser auth after arbitrary network errors.
       try { await cloud(server, call => call.listTools()); }
       catch (error) {
         if (error instanceof UnauthorizedError || ['InvalidGrantError', 'InvalidTokenError'].includes(error.name) || error.message.startsWith('Cloud login required.')) {
+          if (machine) return await authorization();
           await (dependencies.login || login)(server, { open: !flags['no-open'] });
           await cloud(server, call => call.listTools());
         } else throw error;
@@ -224,27 +246,39 @@ export async function setup(root, flags = {}, dependencies = {}) {
       if (flags['brain-id']) selected = { brainId: flags['brain-id'] };
       else if (flags.name) {
         if (!flags['workspace-id']) throw new Error('--workspace-id is required with --name.');
+        if (machine && !flags.confirm) return inputRequired('confirm_project_creation', { name: flags.name, workspaceId: flags['workspace-id'], next: 'Ask the user to confirm the name and Workspace. All Workspace members can access the new Project. Only then rerun with --confirm.' });
         if (!flags.confirm && !(interactive && await prompts.confirm(`Create Project ${flags.name}? All Workspace members can access it.`))) throw new Error('Project creation requires --confirm.');
         selected = await createOrReuse(flags['workspace-id'], flags.name, flags.description || '');
       } else if (current.kind === 'cloud' && current.server === server && !flags['workspace-id'] && !dependencies.reselect) selected = { ...preferences(root).cloudBrain, ...current };
       else {
-        if (!interactive) throw new Error('Select --brain-id, or --workspace-id plus --name --confirm; no Brain is inferred from directory names.');
+        if (!interactive && !machine) throw new Error('Select --brain-id, or --workspace-id plus --name --confirm; no Brain is inferred from directory names.');
         step('Loading Workspaces');
         const workspaces = (await cloud(server, call => call('list_workspaces'))).workspaces;
         if (!workspaces.length) throw new Error('No accessible Workspaces. Check Workspace membership and subscription.');
-        const workspace = flags['workspace-id'] ? workspaces.find(w => (w.id || w.workspaceId) === flags['workspace-id']) : await prompts.choose('Select a Workspace:', workspaces.map(w => ({ name: w.name, value: w })));
+        if (machine && !flags['workspace-id'] && workspaces.length > 1) return inputRequired('select_workspace', { choices: workspaces.map(w => ({ id: w.id || w.workspaceId, name: w.name })),
+          next: 'Ask the user to select a Workspace, then rerun with --workspace-id. Never infer selection from a directory name.' });
+        const workspace = flags['workspace-id'] ? workspaces.find(w => (w.id || w.workspaceId) === flags['workspace-id'])
+          : workspaces.length === 1 ? workspaces[0] : await prompts.choose('Select a Workspace:', workspaces.map(w => ({ name: w.name, value: w })));
         if (!workspace) throw new Error('Workspace is unavailable.');
         const workspaceId = workspace.id || workspace.workspaceId;
         step('Loading Projects');
         const projects = (await cloud(server, call => call('list_projects', { workspaceId }))).projects;
+        const suggestedName = suggestedProjectName(root, projects);
+        if (machine) return inputRequired(projects.length ? 'select_project' : 'name_project', { workspaceId, workspaceName: workspace.name,
+          workspaceAutomaticallySelected: !flags['workspace-id'] && workspaces.length === 1, suggestedName,
+          choices: [...projects.map(p => ({ kind: 'existing', brainId: p.brainId, name: p.name })),
+            { kind: 'create', name: `+ Create a new Project: ${suggestedName}`, suggestedName }],
+          next: projects.length
+            ? 'Present existing Projects followed by the create option with its suggested name, using the host choice tool when available. Existing: rerun with --brain-id, omitting --workspace-id. Create: let the user accept/edit suggestedName, then request creation confirmation with --workspace-id and --name (without --confirm).'
+            : 'This Workspace has no Projects. Ask for a new Project name directly, offering suggestedName as an editable default. Do not ask the user to select from an empty list. Then request creation confirmation with --workspace-id and --name (without --confirm).' });
         while (!selected) {
-          const choice = await prompts.choose('Select a Project or create a new one:', [
-            { name: '+ Create a new Project', value: { kind: 'create' } },
+          const choice = projects.length ? await prompts.choose('Select a Project or create a new one:', [
             ...projects.map(project => ({ name: project.name, value: { kind: 'existing', project } })),
-          ]);
+            { name: `+ Create a new Project: ${suggestedName}`, value: { kind: 'create' } },
+          ]) : { kind: 'create' };
           if (choice.kind === 'existing') selected = { ...choice.project, workspaceId, workspaceName: workspace.name };
           else {
-            const name = await prompts.projectName(projects);
+            const name = await prompts.projectName(projects, suggestedName);
             if (await prompts.confirm(`Create Project "${name}"? All Workspace members can access it.`)) {
               selected = { ...await createOrReuse(workspaceId, name), workspaceName: workspace.name };
             }
@@ -284,7 +318,7 @@ export async function setup(root, flags = {}, dependencies = {}) {
       const probe = await (dependencies.probe || probeMcp)(root);
       const pending = readJson(pendingPath, {});
       if (pending.brainId && pending.brainId === selected?.brainId) rmSync(pendingPath, { force: true });
-      return { installed: true, project: root, binding: binding(root), agents, mcp: probe, codexHooks, warnings,
+      return { ...(machine ? { status: 'ready', restartRequired: true, trustRequired: true } : {}), installed: true, project: root, binding: binding(root), agents, mcp: probe, codexHooks, warnings,
         next: 'Restart the selected Agent in this project and approve its MCP/project/hook trust prompts. For Codex, trust the project and review the installed hooks with /hooks.' };
     });
   } catch (error) {
@@ -293,6 +327,7 @@ export async function setup(root, flags = {}, dependencies = {}) {
     const retry = recovery?.brainId
       ? `Cloud Project was created and retained. Resume without creating it again: mmx --project ${quote(root)} setup --brain-id ${quote(recovery.brainId)} --server ${quote(recovery.server)} --agent ${quote(selectedAgents)}`
       : 'Check the error above, then rerun the command. If Project creation has an unknown outcome, list Projects before retrying creation.';
+    if (machine) return { status: 'error', installed: false, stage, error: error.message, next: retry, ...(recovery?.brainId ? { recovery: { brainId: recovery.brainId, server: recovery.server } } : {}) };
     throw new Error(`${stage} failed: ${error.message}\n${retry}`);
   } finally {
     process.removeListener('exit', cleanup);

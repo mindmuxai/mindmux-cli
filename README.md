@@ -50,6 +50,7 @@ To start setup again, `mmx clean` resets local integration, binding, local Brain
 - [Installation](docs/installation.md) — npm, pnpm and requirements.
 - [Setup and maintenance](docs/setup.md) — agent trust, upgrades, repair and cleanup.
 - [Brain commands](docs/brain.md) — query, write and index operations.
+- [Agent-assisted installation](docs/agent-install.md) — non-interactive setup for agents.
 - [Cloud login](docs/cloud.md) — authentication and binding.
 - [Agent behavior](docs/agents.md) — hooks, memory reviews and limits.
 - [Development](docs/development.md) — tests and verification.
