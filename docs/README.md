@@ -8,6 +8,7 @@ Start with `mmx setup` in your project. Use these guides when you need more deta
 | --- | --- |
 | [Installation](installation.md) | Requirements, pnpm/npm source installation, path changes |
 | [Setup and maintenance](setup.md) | Setup options, Codex trust, status, repair, switching, migration and reset |
+| [Agent-assisted installation](agent-install.md) | Non-interactive setup protocol, authorization, user choices and verification |
 | [Cloud login](cloud.md) | Authentication, Workspaces, Projects and explicit binding |
 | [Brain commands](brain.md) | Reading, writing, indexing, concurrency and low-level MCP access |
 | [Agent behavior](agents.md) | Retrieval, language, hooks, Codex reviews and known limits |

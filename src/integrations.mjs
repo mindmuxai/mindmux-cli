@@ -33,9 +33,9 @@ function ruleText(root) {
   const command = `env ${shellQuote("MINDMUX_HOME=" + homeDir())} ${shellQuote(process.execPath)} ${shellQuote(CLI_BIN)} --project ${shellQuote(root)}`;
   return `MindMux Project Brain\n\n${MEMORY_POLICY}\n\nUse the following CLI command prefix from any working directory:\n\n\`${command}\`\n\nAt the start of every new task (including discussion), run \`<prefix> brain recall "task keywords"\` if relevant context has not arrived via a hook.\nOperations: \`brain index\` (page summaries and root navigation), \`brain reindex\` (regenerate the derived index), \`brain list\`, \`brain search "keywords"\`, \`brain read <id>\`, \`brain roots\`, \`brain read-root <slug>\`. Results are JSON.\nCapture a confirmed decision: pipe its body to \`<prefix> brain create --id <id> --title "Title" --category decision --source "user confirmed ..."\`.\nUpdate: read the complete Page first, then pipe the full replacement body to \`<prefix> brain update <id> --expected-version <version> --summary "Why it changed"\`.\nFor a Cloud correction of typos, formatting or erroneous initial content, use \`<prefix> brain update <id> --expected-version <version> --change-kind correction\` without --summary or --source. Other updates default to substantive and require --summary.\nPreserve unchanged values exactly, including code, quotes and backslashes. JSON output escapes are serialization, not literal Markdown content: decode the string before reusing it. Send body text through stdin using a quoted heredoc or a file, without adding shell/JSON escaping to the body. After creating or updating, read the page back and verify the intended changes and unchanged values before reporting success. If correction is needed, use the newly read version and record the reason.\nAppend evidence: \`<prefix> brain append <id> --kind evidence --summary "Evidence" --source "Source"\`.\nUse \`brain create --status draft\` for explicitly requested proposals; never present drafts as settled facts.\nThe CLI resolves the explicit project binding. For Cloud, do not fall back to local tools after an error. An authenticated MCP can also be used only with the same bound brainId shown by \`brain status\`.\nWhen another Brain guide documents local file commands, retain its data-format contract and route this project's operations through the binding above.\nIf unbound, ask the user to select/create a Brain; never infer a cloud Brain from a folder name.\nBefore finishing, check whether any confirmed durable knowledge remains uncaptured. If none, finish without creating a page.\n`;
 }
-function definitions(root, agent) {
+function definitions(root, agent, { home = homeDir(), node = process.execPath, bin = CLI_BIN } = {}) {
   root = realpathSync(root);
-  const prefix = `env ${shellQuote("MINDMUX_HOME=" + homeDir())} ${shellQuote(process.execPath)} ${shellQuote(CLI_BIN)} --project ${shellQuote(root)} hook --agent ${agent}`;
+  const prefix = `env ${shellQuote("MINDMUX_HOME=" + home)} ${shellQuote(node)} ${shellQuote(bin)} --project ${shellQuote(root)} hook --agent ${agent}`;
   if (agent === 'cursor') return Object.fromEntries([
     ['sessionStart', 'session-start'], ['beforeSubmitPrompt', 'prompt'], ['preToolUse', 'pre-tool'], ['stop', 'stop'],
   ].map(([event, operation]) => [event, [{ command: `${prefix} ${operation}`, ...(event === 'stop' ? { loop_limit: 1 } : {}) }]]));
@@ -50,12 +50,36 @@ function definitions(root, agent) {
   return {};
 }
 const commandOf = definition => definition.command || definition.hooks?.[0]?.command;
+const commandsOf = definition => definition.hooks?.map(hook => hook.command).filter(Boolean) || [definition.command].filter(Boolean);
+
+// Match exact recorded/generated commands, never an arbitrary command containing "mindmux".
+// The setup launcher can recover ownership if only the integration receipt was lost.
+function ownedCommands(root, agent, manifest) {
+  const launcher = readJson(join(root, '.mindmux/cli/setup.json'), {}).agents?.[agent]?.installed;
+  const args = launcher?.args;
+  const known = Object.values(definitions(root, agent)).flat().flatMap(commandsOf);
+  if (Array.isArray(args) && args.length === 5 && args[1] === '--project' && args[2] === realpathSync(root) && args[3] === 'mcp' && args[4] === 'serve'
+    && typeof launcher.command === 'string' && typeof args[0] === 'string') {
+    known.push(...Object.values(definitions(root, agent, { node: launcher.command, bin: args[0], home: launcher.env?.MINDMUX_HOME || homeDir() })).flat().flatMap(commandsOf));
+  }
+  return new Set([...(manifest[agent]?.commands || []), ...known]);
+}
+
+function withoutOwnedCommands(items, owned) {
+  return items.flatMap(item => {
+    if (item.command && owned.has(item.command)) return [];
+    if (!Array.isArray(item.hooks)) return [item];
+    const hooks = item.hooks.filter(hook => !owned.has(hook.command));
+    if (hooks.length === item.hooks.length) return [item];
+    return hooks.length ? [{ ...item, hooks }] : [];
+  });
+}
 
 export function connect(root, agent, { remove = false } = {}) {
   const files = integrationFiles(root, agent);
   const manifestPath = join(root, '.mindmux/cli/integrations.json');
   const manifest = readJson(manifestPath, {});
-  const previous = manifest[agent]?.commands || [];
+  const previous = ownedCommands(root, agent, manifest);
   let text = existsSync(files.rules) ? readFileSync(files.rules, 'utf8') : '';
   // Recognize an empty skeleton left by v0.1's old uninstaller as well as owned rules.
   if (agent === 'cursor' && text && !text.includes(BEGIN) && !text.includes(CURSOR_OWNER) && text.trim() !== CURSOR_HEADER.trim()) throw new Error(`Refusing to overwrite foreign rule: ${files.rules}`);
@@ -76,7 +100,7 @@ export function connect(root, agent, { remove = false } = {}) {
     for (const event of new Set([...Object.keys(settings.hooks), ...Object.keys(defs)])) {
       const current = settings.hooks[event] || [];
       if (!Array.isArray(current)) throw new Error(`Invalid hook array ${event}: ${files.hooks}`);
-      const kept = current.filter(item => !previous.includes(commandOf(item)));
+      const kept = withoutOwnedCommands(current, previous);
       const desired = defs[event] || [];
       settings.hooks[event] = [...kept, ...desired.filter(item => !kept.some(old => commandOf(old) === commandOf(item)))];
       if (!settings.hooks[event].length) delete settings.hooks[event];
@@ -100,7 +124,7 @@ export function inspectIntegrations(root) {
     const files = integrationFiles(root, agent);
     const text = existsSync(files.rules) ? readFileSync(files.rules, 'utf8') : '';
     const hooks = files.hooks ? readJson(files.hooks, {}).hooks || {} : {};
-    const actualCommands = Object.values(hooks).filter(Array.isArray).flat().map(commandOf);
+    const actualCommands = Object.values(hooks).filter(Array.isArray).flat().flatMap(commandsOf);
     const expected = Object.values(definitions(root, agent)).flat().map(commandOf);
     return { agent, mode: installed.mode, rulesPresent: text.includes(BEGIN) && text.includes(END),
       hookCommandsPresent: installed.commands.length > 0 && installed.commands.every(command => actualCommands.includes(command))

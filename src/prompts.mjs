@@ -14,8 +14,9 @@ export function createSetupPrompts(context = { input: process.stdin, output: pro
       { name: 'Cancel', value: false },
       { name: 'Confirm', value: true },
     ], false),
-    projectName: projects => input({
+    projectName: (projects, suggestedName) => input({
       message: 'New Project name:',
+      ...(suggestedName ? { default: suggestedName } : {}),
       theme: { validationFailureMode: 'clear' },
       validate: value => {
         const name = value.trim();

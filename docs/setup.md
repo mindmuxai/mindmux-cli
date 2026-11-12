@@ -120,8 +120,10 @@ mmx clean --keep-login
 mmx clean --yes --json
 ```
 
-Cleanup removes managed MCP entries, instructions and hooks, project binding, session caches, local Brain data, and this project's configuration backups. By default, it also removes **all CLI login credentials and the saved server setting** from the current `MINDMUX_HOME`, which signs out other projects sharing that CLI login. `--keep-login` retains both. This removes local credentials; it does not revoke server grants or end a browser session.
+Cleanup removes managed MCP entries, instructions and hooks, project binding, session caches, local Brain data, the shared update-check cache, and this project's configuration backups. By default, it also removes **all CLI login credentials and the saved server setting** from the current `MINDMUX_HOME`, which signs out other projects sharing that CLI login. `--keep-login` retains both. This removes local credentials; it does not revoke server grants or end a browser session.
 
 **Cloud Projects and Brains are always kept.** Existing cloud Projects can be selected in the next setup. Unrelated agent configuration, custom instructions, unknown preference fields, and other projects' backups are preserved. Empty generated files are removed, and an unchanged brain.md scaffold is removed with local Brain data. Git ignore rules are retained.
 
-Cleanup refuses modified managed MCP entries, unsafe paths, symbolic links, and active setup/write/authentication locks. Stop active agents before resetting. A configured local Brain outside the project requires `--include-external-data`; its path is shown in the confirmation. Local data deletion cannot be undone by `remove`.
+Cleanup removes only CLI-owned commands from mixed hook groups, preserving user handlers and group settings. Hook ownership can be recovered from the saved setup launcher if the integration receipt is missing. If the MCP setup ownership record is missing, cleanup stops before deleting data instead of guessing the original configuration.
+
+Cleanup refuses modified managed MCP entries, unsafe paths, symbolic links, pending browser authorization, and active setup/write/authentication/update locks. Stop active agents before resetting. A configured local Brain outside the project requires `--include-external-data`; its path is shown in the confirmation. Local data deletion cannot be undone by `remove`.

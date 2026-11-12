@@ -16,6 +16,9 @@ Setup:
   mmx setup [--agent claude-code,codex]      login, choose Brain, install MCP + rules/hooks
   mmx setup --local --agent codex --yes     local Brain without Cloud login
   mmx setup --json                         return detailed setup results as JSON
+  mmx setup --non-interactive --json       resumable Agent setup; returns required input or ready
+  mmx login --non-interactive --json       start/reuse background browser authorization
+  mmx login --status check --non-interactive --json  inspect background authorization
   mmx update [--check] [--yes] [--json]     check for releases or upgrade this global installation
   mmx status [--online] [--json]            show configuration and observed activity
   mmx switch [--brain-id ID | --local]      choose another Brain; keep login and data
@@ -80,8 +83,9 @@ function cloudVersion(value) {
 
 export async function main(argv = process.argv.slice(2)) {
   const options = Object.fromEntries(['project', 'agent', 'brain-id', 'server', 'workspace-id', 'name', 'description', 'id', 'title', 'category', 'status', 'source', 'expected-version', 'change-kind', 'summary', 'kind', 'args', 'review-token', 'outcome', 'reason', 'manager'].map(key => [key, { type: 'string' }]));
-  for (const key of ['local', 'online', 'no-open', 'confirm', 'help', 'version', 'yes', 'migrate', 'json', 'keep-login', 'include-external-data', 'fix', 'check', 'refresh-integrations']) options[key] = { type: 'boolean' };
+  for (const key of ['local', 'online', 'no-open', 'confirm', 'help', 'version', 'yes', 'migrate', 'json', 'keep-login', 'include-external-data', 'fix', 'check', 'refresh-integrations', 'non-interactive']) options[key] = { type: 'boolean' };
   const { values: flags, positionals: pos } = parseArgs({ args: argv, options, allowPositionals: true, strict: true });
+  if (flags['non-interactive']) flags.json = true;
   if (flags.version) { console.log(VERSION); return; }
   if (flags.help || pos[0] === 'help' || (!pos.length && (!process.stdin.isTTY || !process.stderr.isTTY || flags.json || flags.yes))) { console.log(HELP); return; }
   const root = realpathSync(flags.project ? resolve(flags.project) : projectRoot());
@@ -126,6 +130,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === 'setup' || command === 'remove' || command === 'switch') {
     const { setup, removeSetup, switchBrain } = await import('./setup.mjs');
     const result = await (command === 'switch' ? switchBrain(root, flags) : command === 'setup' ? setup(root, flags) : removeSetup(root, flags));
+    if (result.status === 'error') process.exitCode = 1;
     if (flags.json) output(result);
     else if (command === 'remove') console.log(result.removed.length ? `Removed connections for ${result.removed.join(', ')}. Brain data, binding and login are kept.` : result.note);
     else {
@@ -148,10 +153,17 @@ export async function main(argv = process.argv.slice(2)) {
   }
   if (command === 'login') {
     const server = selectedServer();
+    if (flags['non-interactive']) {
+      const { startLoginSession, loginSession, publicLoginState } = await import('./login-session.mjs');
+      output(publicLoginState(flags.status === 'check' ? loginSession(server) : await startLoginSession(server, { retry: true })));
+      return;
+    }
     await login(server, { open: !flags['no-open'] });
     writeJson(join(homeDir(), 'config.json'), { server }); return;
   }
   if (command === 'logout') {
+    const { pendingLogin } = await import('./login-session.mjs');
+    if (pendingLogin()) throw new Error('Browser authorization is pending. Complete it or wait for it to expire before signing out.');
     rmSync(credentialPath(selectedServer()), { force: true });
     output({ signedOut: true, note: 'Removed this CLI’s local credentials. This does not revoke other clients or server grants.' }); return;
   }
