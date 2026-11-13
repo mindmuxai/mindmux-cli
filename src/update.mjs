@@ -65,7 +65,7 @@ export async function checkUpdate({ current = VERSION, fetcher = fetch, now = Da
 }
 
 export async function notifyUpdate({ argv = process.argv.slice(2), stdin = process.stdin, stderr = process.stderr, env = process.env, check = checkUpdate } = {}) {
-  if (!stdin.isTTY || !stderr.isTTY || env.CI || env.NO_UPDATE_NOTIFIER || env.MINDMUX_NO_UPDATE_CHECK || argv.some(arg => ['--json', '--help', '--version', '--yes', '--non-interactive'].includes(arg))) return;
+  if (!stdin.isTTY || !stderr.isTTY || env.CI || env.NO_UPDATE_NOTIFIER || env.MINDMUX_NO_UPDATE_CHECK || argv.some(arg => ['--json', '--help', '--version', '--yes', '--non-interactive', '-agent'].includes(arg))) return;
   // Only these exact human-facing commands may contact the registry or print notices.
   const commands = [...argv];
   while (commands[0] === '--project' || commands[0]?.startsWith('--project=')) {

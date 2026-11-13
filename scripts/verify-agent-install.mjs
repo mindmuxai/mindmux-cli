@@ -29,7 +29,7 @@ const call = async args => {
   return value;
 };
 try {
-  const base = ['setup', '--agent', 'claude-code,codex', '--non-interactive', '--server', fixture.serverUrl];
+  const base = ['setup', '--agent', 'claude-code,codex', '-agent', '--server', fixture.serverUrl];
   let result = await call(base);
   for (let i = 0; !result.authorization?.authorizationUrl && i < 30; i++) {
     await new Promise(resolve => setTimeout(resolve, 100)); result = await call(base);
