@@ -16,7 +16,7 @@ Setup:
   mmx setup [--agent claude-code,codex]      login, choose Brain, install MCP + rules/hooks
   mmx setup --local --agent codex --yes     local Brain without Cloud login
   mmx setup --json                         return detailed setup results as JSON
-  mmx setup --non-interactive --json       resumable Agent setup; returns required input or ready
+  mmx setup -agent                        resumable Agent setup (alias: --non-interactive --json)
   mmx login --non-interactive --json       start/reuse background browser authorization
   mmx login --status check --non-interactive --json  inspect background authorization
   mmx update [--check] [--yes] [--json]     check for releases or upgrade this global installation
@@ -84,7 +84,16 @@ function cloudVersion(value) {
 export async function main(argv = process.argv.slice(2)) {
   const options = Object.fromEntries(['project', 'agent', 'brain-id', 'server', 'workspace-id', 'name', 'description', 'id', 'title', 'category', 'status', 'source', 'expected-version', 'change-kind', 'summary', 'kind', 'args', 'review-token', 'outcome', 'reason', 'manager'].map(key => [key, { type: 'string' }]));
   for (const key of ['local', 'online', 'no-open', 'confirm', 'help', 'version', 'yes', 'migrate', 'json', 'keep-login', 'include-external-data', 'fix', 'check', 'refresh-integrations', 'non-interactive']) options[key] = { type: 'boolean' };
-  const { values: flags, positionals: pos } = parseArgs({ args: argv, options, allowPositionals: true, strict: true });
+  // -agent is an exact single-dash alias, distinct from --agent NAME.
+  // Do not rewrite option values or positional content after --.
+  const args = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--') { args.push(...argv.slice(i)); break; }
+    args.push(arg === '-agent' ? '--non-interactive' : arg);
+    if (arg.startsWith('--') && options[arg.slice(2)]?.type === 'string' && i + 1 < argv.length) args.push(argv[++i]);
+  }
+  const { values: flags, positionals: pos } = parseArgs({ args, options, allowPositionals: true, strict: true });
   if (flags['non-interactive']) flags.json = true;
   if (flags.version) { console.log(VERSION); return; }
   if (flags.help || pos[0] === 'help' || (!pos.length && (!process.stdin.isTTY || !process.stderr.isTTY || flags.json || flags.yes))) { console.log(HELP); return; }

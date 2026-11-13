@@ -98,7 +98,7 @@ test('non-interactive CLI installs local integrations and probes real stdio with
   const args = [bin, '--project', f.root, 'setup', '--non-interactive', '--local', '--agent', 'claude-code,codex'];
   const result = JSON.parse((await run(process.execPath, args, options)).stdout);
   assert.equal(result.status, 'ready'); assert.equal(result.mcp.recall, true);
-  assert.equal(JSON.parse((await run(process.execPath, args, options)).stdout).status, 'ready');
+  assert.equal(JSON.parse((await run(process.execPath, args.map(arg => arg === '--non-interactive' ? '-agent' : arg), options)).stdout).status, 'ready');
   const invalid = await run(process.execPath, [bin, '--project', f.root, 'setup', '--non-interactive', '--agent', 'invalid'], options).catch(e => e);
   assert.equal(JSON.parse(invalid.stdout).status, 'error'); assert.equal(invalid.code, 1);
 });
@@ -143,4 +143,25 @@ test('explicit unavailable Workspace errors instead of silently using the sole a
   const state = await setup(f.root, { ...f.flags, 'workspace-id': 'unavailable' }, f.dependencies);
   assert.equal(state.status, 'error'); assert.match(state.error, /unavailable/);
   assert.equal(binding(f.root).kind, 'unbound');
+});
+
+
+test('-agent selects machine mode without changing --agent or normal setup', async t => {
+  const f = fixture(t);
+  const options = { env: { ...process.env, MINDMUX_HOME: f.home }, timeout: 10000 };
+  const base = [bin, '--project', f.root, 'setup'];
+  const short = JSON.parse((await run(process.execPath, [...base, '-agent'], options)).stdout);
+  const long = JSON.parse((await run(process.execPath, [...base, '--non-interactive', '--json'], options)).stdout);
+  assert.deepEqual(short, long);
+  assert.equal(short.step, 'select_agent');
+  assert.equal(short.installed, false);
+  for (const suffix of [['-agent', '--agent', 'invalid'], ['-agent', '--unknown-option']]) {
+    const failed = await run(process.execPath, [...base, ...suffix], options).catch(error => error);
+    assert.equal(failed.code, 1);
+    assert.equal(JSON.parse(failed.stdout).status, 'error');
+  }
+  const normal = await run(process.execPath, base, options).catch(error => error);
+  assert.equal(normal.code, 1);
+  assert.match(normal.stderr, /Specify --agent/);
+  assert.equal(normal.stdout, '');
 });

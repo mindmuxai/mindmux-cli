@@ -57,7 +57,7 @@ test('notifications are TTY-only and exclude MCP, hooks, JSON, CI and opt-outs',
   const options = { stdin: input, stderr: output, env: {}, check: async () => { checks++; return release; } };
   for (const argv of [[], ['setup'], ['status'], ['doctor'], ['--project', '/tmp/project', 'status']]) await notifyUpdate({ ...options, argv });
   assert.equal(checks, 5); assert.match(text, /Run mmx update/);
-  for (const argv of [['hook', 'prompt'], ['--project', '/tmp/project', 'mcp', 'serve'], ['mcp', 'serve'], ['brain', 'read', 'a'], ['status', '--json'], ['--version'], ['status', '--help'], ['setup', '--yes'], ['setup', '--non-interactive']]) await notifyUpdate({ ...options, argv });
+  for (const argv of [['hook', 'prompt'], ['--project', '/tmp/project', 'mcp', 'serve'], ['mcp', 'serve'], ['brain', 'read', 'a'], ['status', '--json'], ['--version'], ['status', '--help'], ['setup', '--yes'], ['setup', '--non-interactive'], ['setup', '-agent']]) await notifyUpdate({ ...options, argv });
   for (const env of [{ CI: '1' }, { NO_UPDATE_NOTIFIER: '1' }, { MINDMUX_NO_UPDATE_CHECK: '1' }]) await notifyUpdate({ ...options, env, argv: ['status'] });
   await notifyUpdate({ ...options, stdin: {}, argv: ['status'] });
   assert.equal(checks, 5);

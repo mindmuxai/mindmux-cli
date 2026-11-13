@@ -17,11 +17,11 @@ Instructions for an agent installing MindMux in the user's current project. The 
 Run commands in the intended project (or provide an explicit `--project PATH`). Start with:
 
 ```sh
-mmx setup --agent codex --non-interactive --json
+mmx setup -agent --agent codex
 # For Claude Code, use --agent claude-code instead.
 ```
 
-`--non-interactive` implies JSON output and never opens a terminal menu. Inspect `status` and `step` after every invocation. Input-required responses exit zero and always report `installed: false`; they are not success. Errors exit nonzero with `status: "error"`. Preserve the selected agent/server/project flags across retries. Pass IDs as separate, properly quoted process arguments; never build executable shell text from returned names or URLs.
+`-agent` is shorthand for `--non-interactive --json` and never opens a terminal menu. It is distinct from `--agent NAME`, which selects the host integration. Plain `mmx setup` retains its interactive wizard. The long form remains supported. Inspect `status` and `step` after every invocation. Input-required responses exit zero and always report `installed: false`; they are not success. Errors exit nonzero with `status: "error"`. Preserve the selected agent/server/project flags across retries. Pass IDs as separate, properly quoted process arguments; never build executable shell text from returned names or URLs.
 
 | Response | Next action |
 | --- | --- |
