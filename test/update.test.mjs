@@ -187,3 +187,36 @@ test('interactive menu exits after an update instead of reusing the old process'
   } }, run: async args => { assert.deepEqual(args, ['update']); return { status: 'updated' }; } });
   assert.equal(calls, 1);
 });
+
+test('Codex Interrupt respects the three-second limit on install and refresh of older hooks', async t => {
+  const f = fixture(t);
+  connect(f.root, 'codex');
+  connect(f.root, 'claude-code');
+  const path = join(f.root, '.codex/hooks.json');
+  const hooks = readJson(path).hooks;
+  assert.equal(hooks.Interrupt[0].hooks[0].timeout, 3);
+  for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop']) {
+    assert.equal(hooks[event][0].hooks[0].timeout, 10);
+    assert.equal(readJson(join(f.root, '.claude/settings.json')).hooks[event][0].hooks[0].timeout, 10);
+  }
+  // Model a v0.1.4 configuration, plus another tool's unrelated handler.
+  hooks.Interrupt[0].hooks[0].timeout = 10;
+  const foreign = { hooks: [{ type: 'command', command: 'echo foreign-interrupt', timeout: 2 }] };
+  hooks.Interrupt.push(foreign);
+  writeJson(path, { hooks });
+  await refreshIntegrations(f.root);
+  await refreshIntegrations(f.root);
+  const refreshed = readJson(path).hooks.Interrupt;
+  assert.equal(refreshed.length, 2);
+  assert.deepEqual(refreshed[0], foreign);
+  assert.equal(refreshed[1].hooks[0].timeout, 3);
+});
+
+
+test('updates request all-project refresh by default from the newly installed CLI', async t => {
+  const f = fixture(t), { deps, calls } = updateDependencies(f);
+  const result = await update(f.root, { yes: true }, deps);
+  assert.equal(result.status, 'updated');
+  const refresh = calls.find(call => call.args.includes('--refresh-integrations'));
+  assert.ok(refresh.args.includes('--all-projects'));
+});

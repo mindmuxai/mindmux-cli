@@ -50,6 +50,19 @@ test('mmx is the public command and previous absolute script paths still work', 
   assert.equal(legacy.stdout, current.stdout);
 });
 
+test('update help is available before project discovery and describes agent and manual upgrades', async () => {
+  const run = promisify(execFile);
+  const { stdout } = await run(process.execPath, [bin, '--project', '/nonexistent-mmx-help-project', 'update', '--help']);
+  assert.match(stdout, /^mmx update —/);
+  assert.match(stdout, /mmx update --yes --json/);
+  assert.match(stdout, /mmx update --refresh-integrations/);
+  assert.match(stdout, /npm install -g @mindmux\/cli@latest/);
+  assert.match(stdout, /pnpm add -g @mindmux\/cli@latest/);
+  assert.match(stdout, /restart affected agents/i);
+  const alias = await run(process.execPath, [bin, 'help', 'update']);
+  assert.equal(alias.stdout, stdout);
+});
+
 test('local lifecycle reuses brain.md, checks versions and preserves provenance', async t => {
   const f = fixture(t);
   await cli(f, ['init', '--local']);

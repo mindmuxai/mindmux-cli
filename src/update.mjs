@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import semver from 'semver';
 import { homeDir, readJson, writeJson } from './storage.mjs';
+import { updateProjects, refreshUpdateProjects } from './update-projects.mjs';
 import { VERSION } from './version.mjs';
 import { createSetupPrompts } from './prompts.mjs';
 
@@ -84,14 +85,24 @@ export async function update(root, flags = {}, dependencies = {}) {
   const current = dependencies.current || VERSION;
   const report = await (dependencies.check || checkUpdate)({ force: true, current });
   if (flags.check) return { ...report, status: report.available ? 'available' : 'current' };
-  if (!report.available) return { ...report, status: 'current' };
+  if (!report.available) {
+    const lock = join(dependencies.home || homeDir(), 'update.lock');
+    mkdirSync(dirname(lock), { recursive: true, mode: 0o700 });
+    try { mkdirSync(lock); } catch { throw new Error('Another update is active. Wait for it to finish before refreshing connections.'); }
+    try {
+      const refresh = await (dependencies.refresh || refreshUpdateProjects)(root, { allProjects: true, home: dependencies.home || homeDir() });
+      return { ...report, status: 'current', refresh, warnings: refresh.warnings || [],
+        next: refresh.refreshed ? 'Restart your agent/MCP service to load refreshed connections.' : 'No managed connections were refreshed.' };
+    } finally { rmSync(lock, { recursive: true, force: true }); }
+  }
   if (!semver.satisfies(process.versions.node, report.node)) throw new Error(`MindMux ${report.latest} requires Node.js ${report.node}. Upgrade Node.js first.`);
   const installation = await (dependencies.detect || detectInstallation)({ run, manager: flags.manager });
   if (installation.kind !== 'global') return { ...report, status: 'manual', installation,
     message: installation.kind === 'source' ? 'Source installation detected. Update your checkout and reinstall using your original source-install workflow; local changes were not modified.' : installation.reason };
+  const plan = (dependencies.projects || updateProjects)(root, { allProjects: true, home: dependencies.home || homeDir() });
   if (!flags.yes) {
     if (!dependencies.prompts && !(process.stdin.isTTY && process.stderr.isTTY)) throw new Error('Run mmx update in an interactive terminal, or pass --yes.');
-    const confirmed = await (dependencies.prompts || createSetupPrompts()).confirm(`Update MindMux ${current} → ${report.latest} using ${installation.manager}? Refresh this project’s managed connections afterwards.`);
+    const confirmed = await (dependencies.prompts || createSetupPrompts()).confirm(`Update MindMux ${current} → ${report.latest} using ${installation.manager}? Refresh managed connections afterwards in:\n${plan.projects.join('\n')}`);
     if (!confirmed) return { ...report, status: 'cancelled' };
   }
   const lock = join(dependencies.home || homeDir(), 'update.lock');
@@ -116,22 +127,29 @@ export async function update(root, flags = {}, dependencies = {}) {
     const warnings = [];
     let refresh;
     try {
-      refresh = JSON.parse(await run(process.execPath, [newBin, '--project', root, 'update', '--refresh-integrations', '--json'], { timeout: 30000 }));
-      if (!refresh.refreshed) warnings.push('No managed connections in this project. Run mmx setup if needed.');
+      refresh = JSON.parse(await run(process.execPath, [newBin, '--project', root, 'update', '--refresh-integrations', '--json', '--all-projects'], { timeout: 30000 }));
+      warnings.push(...(refresh.warnings || []));
+      if (!refresh.refreshed && !refresh.warnings?.length) warnings.push('No managed connections found. Run mmx setup if needed.');
     } catch (error) { warnings.push(`CLI updated, but project connections could not be refreshed: ${error.message}. Run mmx doctor --fix or mmx setup in this project.`); }
     try {
       const pathVersion = await run('mmx', ['--version']);
       if (pathVersion !== report.latest) warnings.push(`Your shell resolves mmx ${pathVersion}, not ${report.latest}. Check PATH for multiple installations.`);
     } catch { warnings.push('Could not verify mmx on PATH. Check PATH or reopen your terminal.'); }
     return { ...report, status: 'updated', manager: installation.manager, installedVersion, refresh, warnings,
-      next: 'Restart your agent/MCP service. Other connected projects may need mmx doctor --fix or mmx setup to refresh their paths and rules.' };
+      next: 'Restart agents/MCP services in refreshed projects. Review any project warnings above.' };
   } finally { rmSync(lock, { recursive: true, force: true }); }
 }
 
 export function formatUpdate(report) {
   if (report.status === 'cancelled') return 'Update cancelled.';
   if (report.status === 'manual') return `${report.message}\nCurrent installation: ${report.installation.path}\nSee docs/installation.md for the original installation workflow.`;
-  if (report.status === 'current') return `MindMux ${report.current} is up to date (latest stable: ${report.latest}).`;
+  if (report.status === 'current') return `MindMux ${report.current} is up to date (latest stable: ${report.latest}).${formatRefresh(report)}${(report.warnings || []).map(warning => `\n• ${warning}`).join('')}${report.next ? `\n\n${report.next}` : ''}`;
   if (report.status === 'available') return `Update available: ${report.current} → ${report.latest}\nRun mmx update to upgrade.`;
-  return `\n✓ Updated MindMux to ${report.installedVersion}.${report.refresh?.refreshed ? '\n✓ Refreshed this project’s integrations.' : ''}\n${report.warnings.map(warning => `\n• ${warning}`).join('')}\n\n${report.next}`;
+  return `\n✓ Updated MindMux to ${report.installedVersion}.${formatRefresh(report)}\n${report.warnings.map(warning => `\n• ${warning}`).join('')}\n\n${report.next}`;
+}
+
+function formatRefresh(report) {
+  if (!report.refresh?.refreshed) return '';
+  if (!report.refresh.projects) return '\n✓ Refreshed this project’s integrations.';
+  return report.refresh.projects.filter(project => project.refreshed).map(project => `\n✓ Refreshed integrations: ${project.project}`).join('');
 }

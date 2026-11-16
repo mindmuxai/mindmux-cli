@@ -42,7 +42,8 @@ function definitions(root, agent, { home = homeDir(), node = process.execPath, b
   if (agent === 'claude-code' || agent === 'codex') return Object.fromEntries([
     ['SessionStart', 'session-start'], ['UserPromptSubmit', 'prompt'], ['Stop', 'stop'], ...(agent === 'codex' ? [['Interrupt', 'interrupt']] : []),
   ].map(([event, operation]) => [event, [{ hooks: [{
-    type: 'command', command: `${prefix} ${operation}`, timeout: 10,
+    // Codex caps Interrupt hooks at three seconds, including background hooks.
+    type: 'command', command: `${prefix} ${operation}`, timeout: agent === 'codex' && event === 'Interrupt' ? 3 : 10,
     // Codex also uses statusMessage as the handler title in /hooks.
     ...(agent === 'codex' ? { statusMessage: CODEX_STATUS_MESSAGES[event] } : {}),
     ...(agent === 'codex' && ['SessionStart', 'UserPromptSubmit'].includes(event) ? { additionalContextLimit: 10000 } : {}),

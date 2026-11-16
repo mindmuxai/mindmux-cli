@@ -1,6 +1,6 @@
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {mkdtempSync,mkdirSync,cpSync,readFileSync,writeFileSync,realpathSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,cpSync,readFileSync,writeFileSync,realpathSync,rmSync,existsSync} from 'node:fs';
 import {join} from 'node:path';
 import {pathToFileURL, fileURLToPath} from 'node:url';
 import {tmpdir} from 'node:os';
@@ -37,16 +37,42 @@ for(const manager of managers){
  const globalRoot=await run(manager,['root','-g']);const oldPackage=realpathSync(join(globalRoot,'@mindmux/cli'));
  // Import from the installed old package so detection sees that exact installation.
  const api=await import(pathToFileURL(oldPackage+'/src/update.mjs').href);
- const project=prefix+'/project';mkdirSync(project);
- await command(process.execPath,[oldPackage+'/bin/mmx.mjs','--project',project,'setup','--local','--agent','claude-code','--yes','--json'],env);
- const prefs=readFileSync(project+'/.mindmux/preferences.json','utf8');
- const report=await api.update(project,{yes:true,json:true},{run,current:'0.1.0',home:env.MINDMUX_HOME,check:async()=>({current:'0.1.0',latest:'0.1.2',node:'>=22',available:true})});
+ const projects=[prefix+'/project',prefix+'/second-project'];
+ const saved=new Map();
+ for(const project of projects){
+  mkdirSync(project);
+  await command(process.execPath,[oldPackage+'/bin/mmx.mjs','--project',project,'setup','--local','--agent','claude-code,codex','--yes','--json'],env);
+  saved.set(project,readFileSync(project+'/.mindmux/preferences.json','utf8'));
+ }
+ const report=await api.update(projects[0],{yes:true,json:true},{run,current:'0.1.0',home:env.MINDMUX_HOME,check:async()=>({current:'0.1.0',latest:'0.1.2',node:'>=22',available:true})});
  assert.equal(report.status,'updated');assert.equal(report.installedVersion,'0.1.2');assert.equal(report.refresh.refreshed,true);assert.deepEqual(report.warnings,[]);
+ assert.equal(report.refresh.projects.filter(p=>p.refreshed).length,2);
  const newPackage=realpathSync(join(await run(manager,['root','-g']),'@mindmux/cli'));
- assert.equal(readFileSync(project+'/.mindmux/preferences.json','utf8'),prefs);
- const hooks=JSON.parse(readFileSync(project+'/.claude/settings.json'));
- assert.ok(hooks.hooks.SessionStart.some(h=>h.hooks.some(x=>x.command.includes(newPackage+'/bin/mmx.mjs'))));
+ // Explicitly remove the retired version to reproduce package-manager cleanup.
+ if(oldPackage!==newPackage) {rmSync(oldPackage,{recursive:true,force:true});assert.equal(existsSync(oldPackage),false);}
+ for(const project of projects){
+  assert.equal(readFileSync(project+'/.mindmux/preferences.json','utf8'),saved.get(project));
+  for(const file of ['.codex/config.toml','.codex/hooks.json','AGENTS.md','.mcp.json','.claude/settings.json','CLAUDE.md']){
+   const content=readFileSync(project+'/'+file,'utf8');
+   assert.ok(content.includes(newPackage+'/bin/mmx.mjs'),file+' must use the new installation');
+   if(oldPackage!==newPackage)assert.ok(!content.includes(oldPackage),file+' must not retain the retired path');
+  }
+  for(const [agent,file] of [['codex','.codex/hooks.json'],['claude-code','.claude/settings.json']]){
+   const hooks=JSON.parse(readFileSync(project+'/'+file));
+   const hook=hooks.hooks.SessionStart[0].hooks[0].command;
+   const output=JSON.parse(await command('/bin/sh',['-c',hook+' < /dev/null'],{...env,PATH:'/usr/bin:/bin'},project));
+   assert.equal(output.hookSpecificOutput.hookEventName,'SessionStart');
+   assert.equal(JSON.parse(readFileSync(project+'/.mindmux/cli/last-'+agent+'-session-start.json')).status,'emitted');
+   for(const [event,operation] of [['UserPromptSubmit','prompt'],['Stop','stop'],...(agent==='codex'?[['Interrupt','interrupt']]:[])]){
+    const handler=hooks.hooks[event][0].hooks[0];
+    JSON.parse(await command('/bin/sh',['-c',handler.command+' < /dev/null'],{...env,PATH:'/usr/bin:/bin'},project));
+    const receipt=JSON.parse(readFileSync(project+'/.mindmux/cli/last-'+agent+'-'+operation+'.json'));
+    assert.ok(!['error','timeout'].includes(receipt.status),agent+' '+event+' failed: '+JSON.stringify(receipt));
+    if(event==='Interrupt')assert.equal(handler.timeout,3);
+   }
+  }
+ }
  assert.equal(await command(join(binDir,'mmx'),['--version'],env),'0.1.2');
- reports.push({manager,oldPackage,newPackage,moved:oldPackage!==newPackage,report});console.log('PASS '+manager+' real isolated global update and configuration refresh');
+ reports.push({manager,oldPackage,newPackage,moved:oldPackage!==newPackage,report});console.log('PASS '+manager+' real global update, both projects refreshed, Codex/Claude hooks execute with minimal PATH after old-version cleanup');
 }
 writeFileSync(dir+'/results.json',JSON.stringify({directory:dir,reports},null,2));console.log(JSON.stringify({directory:dir,reports},null,2));

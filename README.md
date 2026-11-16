@@ -39,9 +39,12 @@ Want a local Brain without Cloud login? Run `mmx setup --local` instead.
 | --- | --- |
 | `mmx` | Open the interactive menu |
 | `mmx status --online` | Check the connection |
+| `mmx update` | Upgrade the CLI and refresh managed integrations |
 | `mmx doctor --fix` | Diagnose and repair setup |
 | `mmx switch` | Choose another Brain |
 | `mmx --help` | Show command help |
+
+Run `mmx update --help` for upgrade instructions, including agent automation and manual npm/pnpm upgrades. Restart affected agents after an update. See [upgrade details](docs/installation.md#update).
 
 To start setup again, `mmx clean` resets local integration, binding, local Brain data and CLI login after confirmation. **Cloud data is kept.** Use `mmx clean --keep-login` to stay signed in. See [cleanup details](docs/setup.md#reset-for-testing).
 
