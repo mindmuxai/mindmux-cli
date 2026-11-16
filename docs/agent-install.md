@@ -12,6 +12,21 @@ Instructions for an agent installing MindMux in the user's current project. The 
 4. For a new installation, use `npm install -g @mindmux/cli@latest` or `pnpm add -g @mindmux/cli@latest`. Do not install a project dependency or use a temporary `npx` installation: generated launchers need a persistent executable path. Do not use `sudo` automatically. Resolve missing global bin/PATH configuration before continuing.
 5. An older installation without the protocol below needs an upgrade through its existing package manager. Newer installations can use `mmx update`.
 
+## Upgrade an existing installation
+
+Read `mmx update --help` before upgrading. In the intended project:
+
+```sh
+mmx update --check --json
+mmx update --yes --json
+```
+
+Use `--yes --json` for agent-driven upgrades; `-agent` is a setup shortcut, not an update shortcut. Inspect `status`, `warnings` and per-project refresh results. An updated package with failed integration refresh is partial completion. Already-current releases still refresh recorded integrations. Do not run `clean` or switch Brain bindings as an upgrade step.
+
+For a version without `update`, use its original installer (`npm install -g @mindmux/cli@latest` or `pnpm add -g @mindmux/cli@latest`), then run `mmx update --refresh-integrations`. For mise or source installations, retain that installation workflow and run the same refresh afterwards. Never install a second global copy to bypass installer detection or use `sudo` automatically.
+
+Verify `mmx --version` and `mmx doctor --online`, report any remaining warnings, and ask the user to restart affected agents and review changed hook trust prompts. These checks do not prove the running host loaded the new tools or executed hooks.
+
 ## Drive setup without a terminal menu
 
 Run commands in the intended project (or provide an explicit `--project PATH`). Start with:

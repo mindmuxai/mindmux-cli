@@ -40,6 +40,8 @@ Review tokens expire after 24 hours and are invalidated when the active turn or 
 
 Upgrade existing Codex installations with `mmx connect --agent codex` or `mmx doctor --fix`, restart Codex and review `/hooks`. The managed installation also handles interruption to invalidate the active review. Claude Code and Cursor retain their existing Stop behavior.
 
+Codex Interrupt handlers use a three-second timeout to match the host limit; other managed Codex and Claude Code handlers retain ten seconds. Existing configurations can be refreshed with `mmx update --refresh-integrations`, then restart Codex and review `/hooks`. See the [official hook limits](https://learn.chatgpt.com/docs/hooks#interrupt).
+
 `doctor` checks files, executable paths, and recent hook receipts:
 
 - `retrieved`: retrieval completed, awaiting delivery.

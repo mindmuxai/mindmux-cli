@@ -19,7 +19,8 @@ Setup:
   mmx setup -agent                        resumable Agent setup (alias: --non-interactive --json)
   mmx login --non-interactive --json       start/reuse background browser authorization
   mmx login --status check --non-interactive --json  inspect background authorization
-  mmx update [--check] [--yes] [--json]     check for releases or upgrade this global installation
+  mmx update [--check] [--yes] [--json]     upgrade and refresh all recorded managed projects
+  mmx update --help                        show upgrade, Agent and manual recovery instructions
   mmx status [--online] [--json]            show configuration and observed activity
   mmx switch [--brain-id ID | --local]      choose another Brain; keep login and data
   mmx clean [--keep-login] [--yes]           reset local setup and data; keep Cloud data
@@ -64,6 +65,38 @@ Cursor: startup context + prompt retrieval delivered at first tool call; one sto
 Claude Code: startup + prompt context; one stop review. Codex: pre-answer review; Stop recovers a missing review once.
 `;
 
+const UPDATE_HELP = `mmx update — upgrade MindMux CLI and refresh managed integrations
+
+Run from a connected project, or pass --project PATH:
+  mmx update                         check, confirm and upgrade with the owning npm/pnpm installer
+  mmx update --check                  check only; never install or change project files
+  mmx update --check --json           machine-readable release check for agents
+  mmx update --yes --json             upgrade without a terminal prompt; inspect warnings and refresh results
+  mmx update --refresh-integrations   refresh offline using this CLI; do not install or check a release
+  mmx update --all-projects           explicit alias for the default recorded-project refresh scope
+  mmx update --manager npm|pnpm        select an installer only if it owns this installation
+
+Updates refresh Hook commands, MCP launchers and project instructions in the current
+and recorded managed projects, even when this CLI is already current. Unrecorded
+projects need the refresh command from their own directory. Partial failures are
+reported per project; package installation alone does not prove integrations work.
+Login, Brain bindings and Brain data are preserved. No setup or clean is needed.
+
+Older releases without update, or manual upgrades (use the original installer):
+  npm install -g @mindmux/cli@latest
+  # Or: pnpm add -g @mindmux/cli@latest
+  mmx update --refresh-integrations
+
+For mise or source installations, upgrade through the original installation workflow,
+then run mmx update --refresh-integrations. Do not install a second global copy.
+Do not use sudo automatically or replace a source checkout with a registry package.
+
+After upgrading, restart affected agents/MCP services and review any changed hook
+trust prompts. Run mmx --version and mmx doctor --online in the intended project.
+Agents: inspect warnings and each project's refresh result before reporting success;
+configuration checks do not prove that a running agent loaded or executed its hooks.
+`;
+
 async function stdin(limit = 1024 * 1024) {
   if (process.stdin.isTTY) throw new Error('Pipe content through stdin.');
   let value = '';
@@ -83,7 +116,7 @@ function cloudVersion(value) {
 
 export async function main(argv = process.argv.slice(2)) {
   const options = Object.fromEntries(['project', 'agent', 'brain-id', 'server', 'workspace-id', 'name', 'description', 'id', 'title', 'category', 'status', 'source', 'expected-version', 'change-kind', 'summary', 'kind', 'args', 'review-token', 'outcome', 'reason', 'manager'].map(key => [key, { type: 'string' }]));
-  for (const key of ['local', 'online', 'no-open', 'confirm', 'help', 'version', 'yes', 'migrate', 'json', 'keep-login', 'include-external-data', 'fix', 'check', 'refresh-integrations', 'non-interactive']) options[key] = { type: 'boolean' };
+  for (const key of ['local', 'online', 'no-open', 'confirm', 'help', 'version', 'yes', 'migrate', 'json', 'keep-login', 'include-external-data', 'fix', 'check', 'refresh-integrations', 'all-projects', 'non-interactive']) options[key] = { type: 'boolean' };
   // -agent is an exact single-dash alias, distinct from --agent NAME.
   // Do not rewrite option values or positional content after --.
   const args = [];
@@ -96,6 +129,7 @@ export async function main(argv = process.argv.slice(2)) {
   const { values: flags, positionals: pos } = parseArgs({ args, options, allowPositionals: true, strict: true });
   if (flags['non-interactive']) flags.json = true;
   if (flags.version) { console.log(VERSION); return; }
+  if ((flags.help && pos[0] === 'update') || (pos[0] === 'help' && pos[1] === 'update')) { console.log(UPDATE_HELP); return; }
   if (flags.help || pos[0] === 'help' || (!pos.length && (!process.stdin.isTTY || !process.stderr.isTTY || flags.json || flags.yes))) { console.log(HELP); return; }
   const root = realpathSync(flags.project ? resolve(flags.project) : projectRoot());
   process.chdir(root);
@@ -115,10 +149,15 @@ export async function main(argv = process.argv.slice(2)) {
     if (action || rest.length) throw new Error('Run mmx update [--check] [--yes] [--json] [--manager npm|pnpm].');
     if (flags['refresh-integrations']) {
       if (flags.check || flags.manager) throw new Error('Integration refresh cannot be combined with update selection flags.');
-      const { refreshIntegrations } = await import('./setup.mjs');
-      const result = await refreshIntegrations(root);
+      // Older updaters call this entry without --all-projects after installing a release.
+      // Default to the full recorded scope so their first upgrade also repairs other projects.
+      const result = await (await import('./update-projects.mjs')).refreshUpdateProjects(root, { allProjects: true });
       if (flags.json) output(result);
-      else console.log(result.refreshed ? 'Managed integrations refreshed. Restart your agent.' : 'No managed integrations in this project.');
+      else {
+        console.log(result.refreshed ? 'Managed integrations refreshed. Restart your agent.' : 'No managed integrations found.');
+        for (const project of result.projects || []) console.log(`${project.refreshed ? '✓' : '•'} ${project.project}${project.error ? `: ${project.error}` : ''}`);
+        for (const warning of result.warnings || []) console.error(`Warning: ${warning}`);
+      }
       return;
     }
     const { update, formatUpdate } = await import('./update.mjs');

@@ -62,7 +62,7 @@ function restore(files) {
 }
 async function transaction(root, files, run) {
   const backup = join(homeDir(), 'backups', createHash('sha256').update(root).digest('hex'), `${Date.now()}-${randomUUID()}.json`);
-  writeJson(backup, { createdAt: new Date().toISOString(), files });
+  writeJson(backup, { project: root, createdAt: new Date().toISOString(), files });
   const interrupted = () => {
     try { restore(files); } catch (error) { console.error(`Interrupted setup rollback failed: ${error.message}. Backup: ${backup}`); }
   };

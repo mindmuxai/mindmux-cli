@@ -47,6 +47,7 @@ mmx setup
 mmx update          # Check, confirm with an arrow-key menu, and upgrade.
 mmx update --check  # Check the latest stable release without installing.
 mmx update --yes    # Upgrade without a confirmation prompt.
+mmx update --all-projects # Explicit alias: updates already refresh recorded projects.
 mmx update --check --json
 ```
 
@@ -54,7 +55,9 @@ Interactive menu, `setup`, `status` and `doctor` commands show a notice when a n
 
 `update` compares the running package with npm/pnpm global roots, then uses its owning manager to install the exact checked version from the official npm registry. It does not switch managers, downgrade, use `sudo`, modify a source checkout, or update a project dependency. If both managers own the same path, select `--manager npm` or `--manager pnpm`; an unrelated manager is never accepted. An unavailable/unrecognized installer produces manual-update guidance instead of installing a second copy.
 
-After installation, it verifies the new CLI version and runs the new CLI to refresh this project's existing managed MCP launchers, instructions and hooks. This refresh backs up configuration, preserves foreign entries, login, Brain binding and data, and does not contact Cloud or request browser authorization. A refresh failure is reported separately from a successful package installation; use `mmx doctor --fix` or `mmx setup` to resolve it. Restart the agent/MCP service afterwards. Other connected projects may need the same repair if their absolute paths or instructions are stale; they are not silently rewritten.
+After installation, it verifies the new CLI version and runs the new CLI to refresh recorded projects’ existing managed MCP launchers, instructions and hooks. This refresh backs up configuration, preserves foreign entries, login, Brain binding and data, and does not contact Cloud or request browser authorization. A refresh failure is reported separately from a successful package installation; use `mmx doctor --fix` or `mmx setup` to resolve it. Restart the agent/MCP service afterwards. By default the current project and existing managed projects identified from this CLI home's configuration backups are refreshed. `--all-projects` remains an explicit alias for this default. Each project is backed up and refreshed independently; a conflict is reported without overwriting unrelated configuration or preventing other projects from being refreshed. Deleted, disconnected or unsafe projects are skipped. The CLI does not scan the filesystem for projects; connect-only projects without backups must be refreshed explicitly from their directory.
+
+When the running CLI is already at or above the latest registry version, `mmx update` still refreshes owned project connections using that running CLI without reinstalling or requiring npm/pnpm ownership detection. This repairs stale paths after an external npm, pnpm or mise upgrade. `--check` stays read-only and never refreshes files. A new package version still requires a supported owning installer; mise-managed packages may require upgrading through mise first.
 
 For older CLI versions without `update`, or for a manual upgrade:
 
@@ -64,7 +67,7 @@ npm install -g @mindmux/cli@latest
 pnpm add -g @mindmux/cli@latest
 ```
 
-Then rerun `mmx setup` in each connected project and restart the agent. The new update mechanism becomes available after the first manual upgrade to a release containing it. `mmx update --refresh-integrations` can also refresh only the current project's owned configuration offline, without checking or installing a release.
+Then run `mmx update` to refresh the current and recorded projects and restart the affected agents. Older CLI versions may still require `mmx setup` after a manual upgrade. The new update mechanism becomes available after the first manual upgrade to a release containing it. `mmx update --refresh-integrations` refreshes the current and recorded projects offline, without checking or installing a release. This default also applies when an older updater invokes the new CLI without `--all-projects`, so the first upgrade to this release refreshes recorded projects too. These commands do not change installation managers, sign in, change Brain bindings or write Brain content.
 
 ## Install from source
 
@@ -108,4 +111,4 @@ The old `bin/mindmux.mjs` script remains as a compatibility entry point for exis
 node scripts/verify-update.mjs npm pnpm
 ```
 
-This creates synthetic old/new package tarballs and isolated temporary global roots, then verifies version changes and refreshed launcher paths, including pnpm's versioned directories. It uses the network for public dependencies and prints the temporary report location. It does not update your actual CLI installation or touch existing projects. Pass only `npm` or `pnpm` to test one manager.
+This creates synthetic old/new package tarballs and isolated temporary global roots, then verifies version changes and refreshed launcher paths in two projects for both Codex and Claude Code, including pnpm's versioned directories. It removes the retired package directory when the path changes and executes every managed hook with a minimal PATH. It uses the network for public dependencies and prints the temporary report location. It does not update your actual CLI installation or touch existing projects. Pass only `npm` or `pnpm` to test one manager.
