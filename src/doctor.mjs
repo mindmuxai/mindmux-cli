@@ -1,4 +1,6 @@
 import { inspectCodexHooks } from './codex-hooks.mjs';
+import { inspectHookAvailability } from './hook-availability.mjs';
+import { AGENTS, requireHookOwnership } from './integrations.mjs';
 import { status } from './status.mjs';
 import { planRepair, applyRepair, legacyWarnings } from './setup.mjs';
 import { createSetupPrompts } from './prompts.mjs';
@@ -12,6 +14,14 @@ export async function diagnose(root, flags = {}, dependencies = {}) {
     repair: { available: false, reason: 'Invalid or unsafe configuration cannot be repaired automatically.' } };
   }
   const checks = [];
+  for (const agent of AGENTS) {
+    try { requireHookOwnership(root, agent); }
+    catch (error) { checks.push({ state: 'error', message: error.message }); }
+  }
+  if (report.integrations.some(item => item.agent === 'claude-code')) {
+    const capability = inspectHookAvailability(root, 'claude-code');
+    checks.push({ state: capability.enabled === false ? 'error' : 'warning', message: capability.message });
+  }
   const check = (ok, message, next) => checks.push({ state: ok ? 'ok' : 'error', message, ...(ok ? {} : { next }) });
   check(report.binding.kind !== 'unbound', report.binding.kind === 'unbound' ? 'No Brain selected.' : 'Project Brain is selected.', 'Run mmx setup to choose a Brain.');
   if (report.binding.kind === 'cloud') check(report.credentialsPresent, report.credentialsPresent ? 'CLI credentials are saved; use --online to validate access.' : 'CLI credentials are missing.', 'Run mmx login, then mmx doctor --online.');
@@ -19,12 +29,12 @@ export async function diagnose(root, flags = {}, dependencies = {}) {
   else checks.push({ state: 'warning', message: 'No setup-managed agents found.', next: 'Run mmx setup to configure agents, or keep using your existing connect-only integration.' });
   for (const item of report.mcp) {
     check(item.configured && item.executablePresent, `${item.agent}: MCP configuration and launcher ${item.configured && item.executablePresent ? 'are present' : 'need attention'}.`, 'Run mmx doctor --fix to review a repair plan.');
-    if (!report.integrations.some(i => i.agent === item.agent)) checks.push({ state: 'error', message: `${item.agent}: managed instructions and hooks are missing.`, next: 'Run mmx doctor --fix to restore the integration.' });
+    if (!report.integrations.some(i => i.agent === item.agent)) checks.push({ state: 'error', message: `${item.agent}: managed hooks are missing.`, next: 'Run mmx doctor --fix to restore the integration.' });
   }
   for (const integration of report.integrations) {
-    check(integration?.rulesPresent && integration?.hookCommandsPresent && integration?.executablePresent,
-      `${integration.agent}: project instructions and hooks ${integration?.rulesPresent && integration?.hookCommandsPresent && integration?.executablePresent ? 'are present' : 'need attention'}.`,
-      'Run mmx doctor --fix to restore managed instructions and hooks.');
+    check(!integration?.hookConflicts?.length && integration?.guidanceReady && integration?.hookCommandsPresent && integration?.executablePresent,
+      `${integration.agent}: hook configuration ${!integration?.hookConflicts?.length && integration?.guidanceReady && integration?.hookCommandsPresent && integration?.executablePresent ? 'is present' : 'needs attention'}.`,
+      'Run mmx doctor --fix to restore managed hooks.');
   }
   if (report.mcp.some(item => item.agent === 'codex') || report.integrations.some(item => item.agent === 'codex')) {
     report.codexHooks = (dependencies.codexHooks || inspectCodexHooks)();

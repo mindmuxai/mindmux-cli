@@ -55,7 +55,8 @@ test('setup installs both project MCP launchers, probes stdio, preserves setting
   assert.match(toml, /keep my comment/); assert.equal(parse(toml).mcp_servers.other.command, 'other-tool');
   assert.equal(parse(toml).mcp_servers.mindmux_cli.env.MINDMUX_HOME, f.home);
   assert.equal(JSON.parse(readFileSync(join(f.root, '.mcp.json'))).other, true);
-  assert.match(readFileSync(join(f.root, 'AGENTS.md'), 'utf8'), /MINDMUX_HOME/);
+  assert.equal(existsSync(join(f.root, 'AGENTS.md')), false);
+  assert.equal(existsSync(join(f.root, 'CLAUDE.md')), false);
   await cli(f, ['setup', '--local', '--agent', 'claude-code,codex', '--yes']);
   assert.equal((readFileSync(join(f.root, '.codex/config.toml'), 'utf8').match(/BEGIN mindmux-cli MCP/g) || []).length, 1);
   const doctor = await cli(f, ['doctor', '--online']); assert.ok(doctor.mcp.every(x => x.configured)); assert.equal(doctor.mcpProbe.recall, true);
@@ -115,7 +116,7 @@ test('setup refuses symlink config and remove preserves user-modified owned entr
   const path = join(f.root, '.mcp.json'); const data = JSON.parse(readFileSync(path)); data.mcpServers.mindmux.command = 'user-customized'; writeFileSync(path, JSON.stringify(data));
   assert.match(await cli(f, ['remove'], true), /changed outside/);
   assert.equal(JSON.parse(readFileSync(path)).mcpServers.mindmux.command, 'user-customized');
-  assert.match(readFileSync(join(f.root, 'CLAUDE.md'), 'utf8'), /BEGIN mindmux-cli/);
+  assert.equal(existsSync(join(f.root, 'CLAUDE.md')), false);
 });
 
 

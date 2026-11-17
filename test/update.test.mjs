@@ -171,7 +171,7 @@ test('refresh rolls back all managed files on invalid configuration and respects
   const f = fixture(t), oldHome = process.env.MINDMUX_HOME; process.env.MINDMUX_HOME = f.home;
   t.after(() => { if (oldHome === undefined) delete process.env.MINDMUX_HOME; else process.env.MINDMUX_HOME = oldHome; });
   connect(f.root, 'claude-code'); connect(f.root, 'codex');
-  const rules = join(f.root, 'CLAUDE.md'), before = readFileSync(rules, 'utf8');
+  const rules = join(f.root, 'CLAUDE.md'); writeFileSync(rules, 'Keep user guidance.\n'); const before = readFileSync(rules, 'utf8');
   writeFileSync(join(f.root, '.codex/hooks.json'), '{broken');
   await assert.rejects(refreshIntegrations(f.root), /Invalid JSON/);
   assert.equal(readFileSync(rules, 'utf8'), before);
@@ -197,7 +197,7 @@ test('Codex Interrupt respects the three-second limit on install and refresh of 
   assert.equal(hooks.Interrupt[0].hooks[0].timeout, 3);
   for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop']) {
     assert.equal(hooks[event][0].hooks[0].timeout, 10);
-    assert.equal(readJson(join(f.root, '.claude/settings.json')).hooks[event][0].hooks[0].timeout, 10);
+    assert.equal(readJson(join(f.root, '.claude/settings.local.json')).hooks[event][0].hooks[0].timeout, 10);
   }
   // Model a v0.1.4 configuration, plus another tool's unrelated handler.
   hooks.Interrupt[0].hooks[0].timeout = 10;

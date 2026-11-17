@@ -32,7 +32,7 @@ async function cli(f, args, input = '', { fail = false } = {}) {
       else if (error) reject(new Error(`${args.join(' ')}: ${stderr || error.message}`));
       else { try { resolve(JSON.parse(stdout)); } catch { reject(new Error(`Invalid JSON stdout: ${stdout}`)); } }
     });
-    child.stdin.end(input);
+    child.stdin.end(args[0] === 'hook' ? JSON.stringify({ cwd: f.project, ...JSON.parse(input || '{}') }) : input);
   });
 }
 const seed = async (f, id = 'auth-choice', status = 'active') => cli(f, ['brain', 'create', '--id', id, '--title', '认证方案：使用 OAuth', '--category', 'decision', '--status', status, '--source', '用户已确认'], '认证使用 OAuth，不在仓库保存 API Key。');
@@ -391,10 +391,10 @@ test('Codex hooks inject context, bound Stop review across continuations, and re
   assert.deepEqual(await invoke('stop', { ...input, session_id: 'aborted', status: 'aborted' }), {});
   for (const file of readdirSync(join(f.project, '.mindmux/cli/sessions'))) assert.doesNotMatch(readFileSync(join(f.project, '.mindmux/cli/sessions', file), 'utf8'), /SECRET_CODEX_PROMPT/);
   writeFileSync(join(f.project, '.mindmux/preferences.json'), '{invalid');
-  assert.deepEqual(await invoke('prompt', input), {});
+  assert.match((await invoke('prompt', input)).hookSpecificOutput.additionalContext, /MindMux recall failed/);
 });
 
-test('writing guidance reaches installed rules, recall hooks and MCP without translating submitted content', async t => {
+test('writing guidance reaches recall hooks and MCP without instruction files without translating submitted content', async t => {
   const f = fixture(t);
   await cli(f, ['init', '--local']);
   await seed(f);
@@ -407,7 +407,7 @@ test('writing guidance reaches installed rules, recall hooks and MCP without tra
     assert.match(text, /--change-kind correction/);
     assert.match(text, /Local brain.md supports substantive updates only/);
   };
-  checkPolicy(readFileSync(join(f.project, 'AGENTS.md'), 'utf8'));
+  assert.equal(existsSync(join(f.project, 'AGENTS.md')), false);
   const hook = await cli(f, ['hook', '--agent', 'codex', 'session-start'], JSON.stringify({ session_id: 'writing-policy-check' }));
   checkPolicy(hook.hookSpecificOutput.additionalContext);
   const client = new Client({ name: 'writing-policy-test', version: '1' });

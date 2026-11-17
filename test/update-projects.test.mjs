@@ -36,7 +36,7 @@ test('an already-current CLI repairs obsolete launcher paths without reinstallin
   const prefs = readFileSync(join(f.root, '.mindmux/preferences.json'), 'utf8');
   const brain = readFileSync(join(f.root, 'brain/index.md'), 'utf8');
   const oldBin = join(f.dir, 'removed-0.1.1/bin/mmx.mjs');
-  for (const name of ['.codex/config.toml', '.codex/hooks.json', 'AGENTS.md', '.mcp.json', '.claude/settings.json', 'CLAUDE.md', '.mindmux/cli/setup.json', '.mindmux/cli/integrations.json']) {
+  for (const name of ['.codex/config.toml', '.codex/hooks.json', '.mcp.json', '.claude/settings.local.json', '.mindmux/cli/setup.json', '.mindmux/cli/integrations.json']) {
     const path = join(f.root, name);
     writeFileSync(path, readFileSync(path, 'utf8').replaceAll(CLI_BIN, oldBin));
   }
@@ -44,7 +44,7 @@ test('an already-current CLI repairs obsolete launcher paths without reinstallin
     detect: async () => { throw new Error('Must not reinstall or detect package manager'); },
     run: async () => { throw new Error('Must not launch package manager or login'); } });
   assert.equal(result.status, 'current'); assert.equal(result.refresh.refreshed, true);
-  for (const name of ['.codex/config.toml', '.codex/hooks.json', 'AGENTS.md', '.mcp.json', '.claude/settings.json', 'CLAUDE.md']) {
+  for (const name of ['.codex/config.toml', '.codex/hooks.json', '.mcp.json', '.claude/settings.local.json']) {
     const content = readFileSync(join(f.root, name), 'utf8');
     assert.ok(content.includes(CLI_BIN)); assert.ok(!content.includes(oldBin));
   }

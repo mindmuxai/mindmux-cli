@@ -36,7 +36,7 @@ test('clean resets local setup, data, caches, project backups and login while pr
   put(join(f.root, 'keep.txt'), 'source content');
   const result = await run(f, 'clean', '--yes');
   assert.equal(result.cleaned, true); assert.equal(result.signedOut, true); assert.equal(result.cloudDataDeleted, false);
-  for (const path of ['brain', 'BRAIN.md', '.mindmux/preferences.json', '.mindmux/cli', '.mcp.json', '.claude/settings.json', '.codex/hooks.json', '.cursor/rules/mindmux.mdc']) assert.equal(existsSync(join(f.root, path)), false, path);
+  for (const path of ['brain', 'BRAIN.md', '.mindmux/preferences.json', '.mindmux/cli', '.mcp.json', '.claude/settings.local.json', '.codex/hooks.json', '.cursor/rules/mindmux.mdc']) assert.equal(existsSync(join(f.root, path)), false, path);
   assert.equal(readFileSync(join(f.root, 'AGENTS.md'), 'utf8').trim(), 'Keep my instructions.');
   assert.equal(readFileSync(join(f.root, '.codex/config.toml'), 'utf8').trim(), 'model = "custom"');
   assert.equal(readFileSync(join(f.root, 'keep.txt'), 'utf8'), 'source content');
@@ -137,7 +137,7 @@ test('clean preserves unrelated Codex hooks while removing managed lifecycle han
 test('clean removes owned handlers anywhere in mixed hook groups and preserves foreign group metadata', async t => {
   const f = fixture(t);
   await run(f, 'setup', '--local', '--agent', 'claude-code,codex', '--yes');
-  for (const path of ['.codex/hooks.json', '.claude/settings.json']) {
+  for (const path of ['.codex/hooks.json', '.claude/settings.local.json']) {
     const file = join(f.root, path), config = JSON.parse(readFileSync(file));
     const expected = {};
     for (const [event, groups] of Object.entries(config.hooks)) {
@@ -155,7 +155,7 @@ test('clean removes owned handlers anywhere in mixed hook groups and preserves f
     f[path] = { hooks: expected, unrelated: true };
   }
   await run(f, 'clean', '--yes');
-  for (const path of ['.codex/hooks.json', '.claude/settings.json']) {
+  for (const path of ['.codex/hooks.json', '.claude/settings.local.json']) {
     assert.deepEqual(JSON.parse(readFileSync(join(f.root, path))), f[path]);
   }
 });
@@ -168,13 +168,13 @@ test('clean recovers hook ownership from setup when integration receipt is missi
   const oldBin = join(f.dir, 'previous-install/bin/mmx.mjs');
   for (const record of Object.values(setup.agents)) record.installed.args[0] = oldBin;
   put(setupPath, setup);
-  for (const path of ['.codex/hooks.json', '.claude/settings.json', '.codex/config.toml', '.mcp.json']) {
+  for (const path of ['.codex/hooks.json', '.claude/settings.local.json', '.codex/config.toml', '.mcp.json']) {
     const file = join(f.root, path);
     put(file, readFileSync(file, 'utf8').replaceAll(bin, oldBin));
   }
   rmSync(join(f.root, '.mindmux/cli/integrations.json'));
   await run(f, 'clean', '--yes');
-  for (const path of ['.codex/hooks.json', '.claude/settings.json', '.codex/config.toml', '.mcp.json']) assert.equal(existsSync(join(f.root, path)), false, path);
+  for (const path of ['.codex/hooks.json', '.claude/settings.local.json', '.codex/config.toml', '.mcp.json']) assert.equal(existsSync(join(f.root, path)), false, path);
 });
 
 test('clean clears update and OAuth session caches, keeps other project state, and permits Agent setup again', async t => {
@@ -188,7 +188,7 @@ test('clean clears update and OAuth session caches, keeps other project state, a
   assert.equal(existsSync(join(f.home, 'auth')), false);
   assert.equal(existsSync(join(f.home, 'update-check.json')), false);
   assert.equal(JSON.parse(readFileSync(other)).cloudBrain.brainId, 'other');
-  for (const path of ['AGENTS.md', 'CLAUDE.md', '.codex/hooks.json', '.claude/settings.json', '.codex/config.toml', '.mcp.json', '.mindmux/cli']) assert.equal(existsSync(join(f.root, path)), false, path);
+  for (const path of ['AGENTS.md', 'CLAUDE.md', '.codex/hooks.json', '.claude/settings.local.json', '.codex/config.toml', '.mcp.json', '.mindmux/cli']) assert.equal(existsSync(join(f.root, path)), false, path);
   const waiting = await run(f, 'setup', '--non-interactive');
   assert.equal(waiting.step, 'select_agent'); assert.equal(waiting.installed, false);
   const ready = await run(f, 'setup', '--local', '--agent', 'claude-code,codex', '--non-interactive');

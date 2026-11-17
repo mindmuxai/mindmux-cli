@@ -76,7 +76,7 @@ Run from a connected project, or pass --project PATH:
   mmx update --all-projects           explicit alias for the default recorded-project refresh scope
   mmx update --manager npm|pnpm        select an installer only if it owns this installation
 
-Updates refresh Hook commands, MCP launchers and project instructions in the current
+Updates refresh Hook commands and MCP launchers, and remove legacy MindMux instruction blocks in the current
 and recorded managed projects, even when this CLI is already current. Unrecorded
 projects need the refresh command from their own directory. Partial failures are
 reported per project; package installation alone does not prove integrations work.

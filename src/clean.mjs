@@ -5,7 +5,7 @@ import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { homeDir, preferences, preferencesPath, readJson, writeJson } from './storage.mjs';
-import { AGENTS, connect, integrationFiles, managedBlock } from './integrations.mjs';
+import { AGENTS, connect, integrationFiles, managedBlock, discoverHookAgents } from './integrations.mjs';
 import { guardPath, planHost, hostState } from './host-config.mjs';
 import { removeSetup } from './setup.mjs';
 import { brainPackage } from './brain.mjs';
@@ -33,7 +33,7 @@ function cleanPlan(root, flags) {
     const { rules } = integrationFiles(root, agent); guardPath(root, rules);
     return existsSync(rules) && readFileSync(rules, 'utf8').includes('<!-- BEGIN mindmux-cli -->');
   });
-  const agents = [...new Set([...Object.keys(setup.agents || {}), ...Object.keys(integrations), ...markedAgents])];
+  const agents = [...new Set([...Object.keys(setup.agents || {}), ...Object.keys(integrations), ...markedAgents, ...discoverHookAgents(root)])];
   for (const agent of agents) {
     if (!AGENTS.includes(agent)) throw new Error(`Unknown integration in cleanup manifest: ${agent}`);
     if (agent !== 'cursor' && !setup.agents?.[agent]) {
@@ -46,9 +46,9 @@ function cleanPlan(root, flags) {
     const files = integrationFiles(root, agent);
     for (const file of Object.values(files)) guardPath(root, file);
     managedBlock(existsSync(files.rules) ? readFileSync(files.rules, 'utf8') : '', '');
-    if (files.hooks) {
-      const settings = readJson(files.hooks, {});
-      if (settings.hooks !== undefined && (!settings.hooks || typeof settings.hooks !== 'object' || Array.isArray(settings.hooks) || Object.values(settings.hooks).some(value => !Array.isArray(value)))) throw new Error(`Invalid hooks: ${files.hooks}`);
+    for (const path of [files.hooks, files.legacyHooks].filter(Boolean)) {
+      const settings = readJson(path, {});
+      if (settings.hooks !== undefined && (!settings.hooks || typeof settings.hooks !== 'object' || Array.isArray(settings.hooks) || Object.values(settings.hooks).some(value => !Array.isArray(value)))) throw new Error(`Invalid hooks: ${path}`);
     }
   }
   const data = [...new Set([join(root, 'brain'), ...(prefs.brainRoot ? [resolve(root, prefs.brainRoot)] : [])])].filter(existsSync);

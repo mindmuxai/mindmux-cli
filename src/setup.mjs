@@ -6,10 +6,11 @@ import { execFileSync } from 'node:child_process';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import { binding, preferences, mergePreferences, readJson, writeJson, writeAtomic, homeDir, DEFAULT_SERVER, serverUrl, ignoreRuntime } from './storage.mjs';
 import { login, credentialPath, withCloud } from './cloud.mjs';
-import { AGENTS, connect, integrationFiles, managedBlock } from './integrations.mjs';
+import { AGENTS, connect, integrationFiles, managedBlock, requireHookOwnership } from './integrations.mjs';
 import { localCommand } from './brain.mjs';
 import { planHost, hostState, guardPath } from './host-config.mjs';
 import { probeMcp } from './mcp-server.mjs';
+import { inspectHookAvailability, requireHooksAvailable } from './hook-availability.mjs';
 import { inspectCodexHooks } from './codex-hooks.mjs';
 import { createSetupPrompts } from './prompts.mjs';
 import { startLoginSession, publicLoginState } from './login-session.mjs';
@@ -45,7 +46,7 @@ function pathsFor(root, agents) {
   return [...new Set([join(root, '.mindmux/preferences.json'), join(root, '.gitignore'), setupPath(root), join(root, '.mindmux/cli/integrations.json'),
     ...agents.flatMap(agent => {
       const f = integrationFiles(root, agent);
-      return [f.rules, f.hooks, hostState(root, agent).path, join(root, agent === 'codex' ? '.codex/hooks.json' : '.claude/settings.json'), join(root, agent === 'codex' ? '.codex/hooks/brain-session-start' : '.claude/hooks/brain-session-start')].filter(Boolean);
+      return [f.rules, f.hooks, f.legacyHooks, hostState(root, agent).path, join(root, agent === 'codex' ? '.codex/hooks.json' : '.claude/settings.json'), join(root, agent === 'codex' ? '.codex/hooks/brain-session-start' : '.claude/hooks/brain-session-start')].filter(Boolean);
     })])];
 }
 function snapshot(root, paths) {
@@ -83,11 +84,14 @@ function preflight(root, agents, manifest, migrate, remove = false, repair = fal
     const files = integrationFiles(root, agent);
     guardPath(root, files.rules);
     managedBlock(existsSync(files.rules) ? readFileSync(files.rules, 'utf8') : '', 'preflight');
-    if (files.hooks) {
-      const settings = readJson(files.hooks, {});
-      if (settings.hooks !== undefined && (!settings.hooks || typeof settings.hooks !== 'object' || Array.isArray(settings.hooks))) throw new Error(`Invalid hooks: ${files.hooks}`);
-      for (const hooks of Object.values(settings.hooks || {})) if (!Array.isArray(hooks)) throw new Error(`Invalid hook array: ${files.hooks}`);
+    for (const path of [files.hooks, files.legacyHooks].filter(Boolean)) {
+      guardPath(root, path);
+      const settings = readJson(path, {});
+      if (settings.hooks !== undefined && (!settings.hooks || typeof settings.hooks !== 'object' || Array.isArray(settings.hooks))) throw new Error(`Invalid hooks: ${path}`);
+      for (const hooks of Object.values(settings.hooks || {})) if (!Array.isArray(hooks)) throw new Error(`Invalid hook array: ${path}`);
     }
+    requireHookOwnership(root, agent);
+    if (!remove && agent === 'claude-code') requireHooksAvailable(inspectHookAvailability(root, agent));
     return { agent, plan: planHost(root, agent, manifest.agents?.[agent], { migrate, remove, repair }) };
   });
 }
@@ -102,7 +106,7 @@ export function planRepair(root) {
   const files = snapshot(root, pathsFor(root, agents));
   return { agents, files: files.map(file => file.path), fingerprint: fingerprint(files),
     actions: ['Refresh managed MCP launchers and restore missing managed entries.',
-      'Refresh managed project instructions and hooks; preserve surrounding user content.',
+      'Refresh managed hooks and remove legacy MindMux instruction blocks; preserve user content.',
       'Back up project configuration and verify MCP launch and Brain recall.'],
     note: 'Brain binding and data are kept. Cloud validation may require browser login. Restart the selected agents after repair.' };
 }
@@ -200,6 +204,7 @@ export async function setup(root, flags = {}, dependencies = {}) {
     const files = snapshot(root, pathsFor(root, agents));
     if (dependencies.expectedFingerprint && fingerprint(files) !== dependencies.expectedFingerprint) throw new Error('Configuration changed after the repair plan was shown. Run mmx doctor --fix again.');
     const codexHooks = agents.includes('codex') ? (dependencies.codexHooks || inspectCodexHooks)() : undefined;
+    requireHooksAvailable(codexHooks);
     const warnings = [...legacyWarnings(root), ...(codexHooks && (!codexHooks.supported || !codexHooks.enabled) ? [codexHooks.message] : [])];
     if (warnings.length) console.error(warnings.join('\n'));
     const current = binding(root);
@@ -304,7 +309,7 @@ export async function setup(root, flags = {}, dependencies = {}) {
       } else mergePreferences(root, { cloudBrain: { enabled: true, ...selected }, mindmuxCli: { ...preferences(root).mindmuxCli, server } });
       for (const { agent, plan } of plans) {
         if (migrate) localCommand(root, ['uninstall-hooks', '--agent', agent]);
-        connect(root, agent);
+        connect(root, agent, { availability: agent === 'codex' ? codexHooks : undefined });
         writeAtomic(plan.path, plan.content);
       }
       const next = { ...manifest, agents: { ...manifest.agents }, created, updatedAt: new Date().toISOString() };
