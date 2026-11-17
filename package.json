@@ -1,6 +1,6 @@
 {
   "name": "@mindmux/cli",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Brain operations and lifecycle integrations for coding agents",
   "type": "module",
   "bin": {
