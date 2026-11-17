@@ -74,7 +74,7 @@ test('doctor refuses modified entries and malformed configuration without writin
 
 test('doctor preview and cancellation do not mutate files; changed plans are rejected', async t => {
   const { root } = fixture(t); await install(root);
-  rmSync(join(root, 'AGENTS.md'));
+  rmSync(join(root, '.codex/hooks.json'));
   const plan = planRepair(root);
   let confirmations = 0;
   const cancelled = await doctor(root, { fix: true, json: true }, { ...dependencies, prompts: { confirm: async () => { confirmations++; return false; } } });
@@ -87,7 +87,7 @@ test('doctor preview and cancellation do not mutate files; changed plans are rej
 
 test('doctor rolls back failed repair and rejects symlinks', async t => {
   const { dir, root } = fixture(t); await install(root);
-  rmSync(join(root, 'AGENTS.md'));
+  rmSync(join(root, '.codex/hooks.json'));
   const failed = await doctor(root, { fix: true, yes: true, json: true }, { probe: async () => { throw new Error('failed check'); } });
   assert.equal(failed.repairResult.applied, false); assert.match(failed.repairResult.error, /configuration restored/);
   assert.equal(existsSync(join(root, 'AGENTS.md')), false);
@@ -104,7 +104,7 @@ test('doctor has readable output, explicit JSON, and no repair without nonintera
   assert.match(human.stdout, /MindMux doctor/); assert.throws(() => JSON.parse(human.stdout));
   const json = JSON.parse((await run(process.execPath, [...args, 'doctor', '--json'])).stdout);
   assert.equal(json.healthy, true);
-  rmSync(join(root, 'AGENTS.md'));
+  rmSync(join(root, '.codex/hooks.json'));
   await assert.rejects(run(process.execPath, [...args, 'doctor', '--fix', '--json']), error => {
     assert.match(JSON.parse(error.stdout).repairResult.reason, /--fix --yes/); return true;
   });
@@ -154,7 +154,7 @@ test('Cloud repair retains the explicit binding and login without any remote wri
   prefs.mindmuxCli = { server }; writeJson(prefsPath, prefs);
   writeJson(credentialPath(server), { tokens: { access_token: 'fixture-token' } });
   const login = readFileSync(credentialPath(server), 'utf8');
-  rmSync(join(root, 'AGENTS.md'));
+  rmSync(join(root, '.codex/hooks.json'));
   const calls = [];
   const cloud = async (_server, run) => {
     const call = async (name, args) => { calls.push(name); assert.equal(name, 'resolve_brain'); assert.equal(args.brainId, 'existing-cloud-brain'); return { status: 'resolved', brain: { name: 'Existing Brain' } }; };
@@ -171,7 +171,7 @@ test('Cloud repair retains the explicit binding and login without any remote wri
 
 test('doctor reports malformed instruction markers as unhealthy and exits nonzero without changing them', async t => {
   const { root } = fixture(t); await install(root);
-  const rules = join(root, 'AGENTS.md'); const content = readFileSync(rules, 'utf8');
+  const rules = join(root, 'AGENTS.md'); const content = '<!-- BEGIN mindmux-cli -->\nlegacy\n<!-- END mindmux-cli -->\n';
   writeFileSync(rules, content + content);
   const report = await diagnose(root);
   assert.equal(report.healthy, false);

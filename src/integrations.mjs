@@ -2,6 +2,8 @@ import { existsSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readJson, writeJson, writeAtomic, ignoreRuntime, homeDir } from './storage.mjs';
+import { guardPath } from './host-config.mjs';
+import { inspectHookAvailability, requireHooksAvailable } from './hook-availability.mjs';
 import { MEMORY_POLICY } from './recall.mjs';
 
 export const CLI_BIN = fileURLToPath(new URL('../bin/mmx.mjs', import.meta.url));
@@ -26,10 +28,10 @@ export function managedBlock(text, content) {
 export function integrationFiles(root, agent) {
   if (!AGENTS.includes(agent)) throw new Error(`Unknown agent. Choose ${AGENTS.join(', ')}.`);
   return agent === 'cursor' ? { rules: join(root, '.cursor/rules/mindmux.mdc'), hooks: join(root, '.cursor/hooks.json') }
-    : agent === 'claude-code' ? { rules: join(root, 'CLAUDE.md'), hooks: join(root, '.claude/settings.json') }
+    : agent === 'claude-code' ? { rules: join(root, 'CLAUDE.md'), hooks: join(root, '.claude/settings.local.json'), legacyHooks: join(root, '.claude/settings.json') }
     : { rules: join(root, 'AGENTS.md'), hooks: join(root, '.codex/hooks.json') };
 }
-function ruleText(root) {
+export function agentGuidance(root) {
   const command = `env ${shellQuote("MINDMUX_HOME=" + homeDir())} ${shellQuote(process.execPath)} ${shellQuote(CLI_BIN)} --project ${shellQuote(root)}`;
   return `MindMux Project Brain\n\n${MEMORY_POLICY}\n\nUse the following CLI command prefix from any working directory:\n\n\`${command}\`\n\nAt the start of every new task (including discussion), run \`<prefix> brain recall "task keywords"\` if relevant context has not arrived via a hook.\nOperations: \`brain index\` (page summaries and root navigation), \`brain reindex\` (regenerate the derived index), \`brain list\`, \`brain search "keywords"\`, \`brain read <id>\`, \`brain roots\`, \`brain read-root <slug>\`. Results are JSON.\nCapture a confirmed decision: pipe its body to \`<prefix> brain create --id <id> --title "Title" --category decision --source "user confirmed ..."\`.\nUpdate: read the complete Page first, then pipe the full replacement body to \`<prefix> brain update <id> --expected-version <version> --summary "Why it changed"\`.\nFor a Cloud correction of typos, formatting or erroneous initial content, use \`<prefix> brain update <id> --expected-version <version> --change-kind correction\` without --summary or --source. Other updates default to substantive and require --summary.\nPreserve unchanged values exactly, including code, quotes and backslashes. JSON output escapes are serialization, not literal Markdown content: decode the string before reusing it. Send body text through stdin using a quoted heredoc or a file, without adding shell/JSON escaping to the body. After creating or updating, read the page back and verify the intended changes and unchanged values before reporting success. If correction is needed, use the newly read version and record the reason.\nAppend evidence: \`<prefix> brain append <id> --kind evidence --summary "Evidence" --source "Source"\`.\nUse \`brain create --status draft\` for explicitly requested proposals; never present drafts as settled facts.\nThe CLI resolves the explicit project binding. For Cloud, do not fall back to local tools after an error. An authenticated MCP can also be used only with the same bound brainId shown by \`brain status\`.\nWhen another Brain guide documents local file commands, retain its data-format contract and route this project's operations through the binding above.\nIf unbound, ask the user to select/create a Brain; never infer a cloud Brain from a folder name.\nBefore finishing, check whether any confirmed durable knowledge remains uncaptured. If none, finish without creating a page.\n`;
 }
@@ -76,20 +78,72 @@ function withoutOwnedCommands(items, owned) {
   });
 }
 
-export function connect(root, agent, { remove = false } = {}) {
+// Recognizing a historical shape is enough to report a conflict, never enough
+// to delete a command whose ownership cannot be established.
+const looksManaged = command => /(?:mmx|mindmux)\.mjs['"]?\s+--project\s/.test(command)
+  && /\shook --agent (?:codex|claude-code|cursor) (?:session-start|prompt|pre-tool|stop|interrupt)(?:\s|$)/.test(command);
+export function inspectHookOwnership(root, agent) {
   const files = integrationFiles(root, agent);
+  const owned = ownedCommands(root, agent, readJson(join(root, '.mindmux/cli/integrations.json'), {}));
+  const conflicts = []; let recognized = false;
+  for (const path of [files.hooks, files.legacyHooks].filter(Boolean)) {
+    guardPath(root, path);
+    const hooks = readJson(path, {}).hooks || {};
+    if (typeof hooks !== 'object' || Array.isArray(hooks)) throw new Error(`Invalid hooks: ${path}`);
+    for (const items of Object.values(hooks)) {
+      if (!Array.isArray(items)) throw new Error(`Invalid hook array: ${path}`);
+      for (const command of items.flatMap(commandsOf)) {
+        if (owned.has(command)) recognized = true;
+        else if (looksManaged(command)) conflicts.push(path);
+      }
+    }
+  }
+  return { recognized, conflicts: [...new Set(conflicts)] };
+}
+export function requireHookOwnership(root, agent) {
+  const state = inspectHookOwnership(root, agent);
+  if (state.conflicts.length) throw new Error(`MindMux hook migration conflict: ${state.conflicts.join(', ')} contains historical commands without local ownership records. Review and explicitly remove only the obsolete MindMux handlers, or restore their installation records, then retry. No unknown handlers were removed.`);
+  return state;
+}
+export function discoverHookAgents(root) {
+  return AGENTS.filter(agent => { const state = requireHookOwnership(root, agent); return state.recognized; });
+}
+
+export function connect(root, agent, { remove = false, availability } = {}) {
+  const files = integrationFiles(root, agent);
+  for (const path of Object.values(files)) guardPath(root, path);
   const manifestPath = join(root, '.mindmux/cli/integrations.json');
   const manifest = readJson(manifestPath, {});
   const previous = ownedCommands(root, agent, manifest);
+  requireHookOwnership(root, agent);
+  if (!remove) requireHooksAvailable(availability || inspectHookAvailability(root, agent));
   let text = existsSync(files.rules) ? readFileSync(files.rules, 'utf8') : '';
   // Recognize an empty skeleton left by v0.1's old uninstaller as well as owned rules.
   if (agent === 'cursor' && text && !text.includes(BEGIN) && !text.includes(CURSOR_OWNER) && text.trim() !== CURSOR_HEADER.trim()) throw new Error(`Refusing to overwrite foreign rule: ${files.rules}`);
-  text = managedBlock(text, remove ? '' : ruleText(root));
+  const originalText = text;
+  text = managedBlock(text, remove || agent !== 'cursor' ? '' : agentGuidance(root));
   let removeRule = false;
   if (agent === 'cursor') {
     if (!text.startsWith('---')) text = `${CURSOR_HEADER}${text}`;
     removeRule = remove && !text.replace(CURSOR_HEADER, '').replace(CURSOR_OWNER, '').trim();
     if (!removeRule && !text.includes(CURSOR_OWNER)) text += `\n${CURSOR_OWNER}\n`;
+  }
+  // Validate both local and legacy shared configuration before mutating either.
+  let legacy;
+  if (files.legacyHooks && existsSync(files.legacyHooks)) {
+    const original = readJson(files.legacyHooks, {});
+    legacy = { ...original };
+    if (legacy.hooks !== undefined) {
+      if (!legacy.hooks || typeof legacy.hooks !== 'object' || Array.isArray(legacy.hooks)) throw new Error(`Invalid hooks object: ${files.legacyHooks}`);
+      legacy.hooks = { ...legacy.hooks };
+      for (const [event, items] of Object.entries(legacy.hooks)) {
+        if (!Array.isArray(items)) throw new Error(`Invalid hook array ${event}: ${files.legacyHooks}`);
+        legacy.hooks[event] = withoutOwnedCommands(items, previous);
+        if (!legacy.hooks[event].length) delete legacy.hooks[event];
+      }
+      if (!Object.keys(legacy.hooks).length) delete legacy.hooks;
+    }
+    if (JSON.stringify(original) === JSON.stringify(legacy)) legacy = undefined;
   }
   let settings;
   const defs = remove ? {} : definitions(root, agent);
@@ -108,13 +162,20 @@ export function connect(root, agent, { remove = false } = {}) {
     }
   }
   if (removeRule) rmSync(files.rules, { force: true });
-  else writeAtomic(files.rules, text);
+  else if (text !== originalText || agent === 'cursor') {
+    if (agent !== 'cursor' && !text.trim()) rmSync(files.rules, { force: true });
+    else writeAtomic(files.rules, text);
+  }
+  if (legacy) {
+    if (Object.keys(legacy).length) writeJson(files.legacyHooks, legacy);
+    else rmSync(files.legacyHooks, { force: true });
+  }
   if (settings) writeJson(files.hooks, settings);
   if (remove) delete manifest[agent];
   else manifest[agent] = { installedAt: new Date().toISOString(), bin: CLI_BIN, node: process.execPath,
     commands: Object.values(defs).flat().map(commandOf), mode: 'hooks' };
   writeJson(manifestPath, manifest);
-  ignoreRuntime(root, agent === 'codex' && !remove ? ['/.codex/hooks.json'] : []);
+  ignoreRuntime(root, !remove ? agent === 'codex' ? ['/.codex/hooks.json'] : agent === 'claude-code' ? ['/.claude/settings.local.json'] : [] : []);
   return { agent, installed: !remove, mode: 'hooks', ...files,
     note: agent === 'codex' ? 'Restart Codex, trust the project, and review the installed hooks with /hooks. Hook execution requires a compatible Codex with hooks enabled.' : 'Restart/reload the agent and review hook trust. doctor reports configured state; real delivery requires host execution.' };
 }
@@ -127,10 +188,12 @@ export function inspectIntegrations(root) {
     const hooks = files.hooks ? readJson(files.hooks, {}).hooks || {} : {};
     const actualCommands = Object.values(hooks).filter(Array.isArray).flat().flatMap(commandsOf);
     const expected = Object.values(definitions(root, agent)).flat().map(commandOf);
-    return { agent, mode: installed.mode, rulesPresent: text.includes(BEGIN) && text.includes(END),
+    return { agent, mode: installed.mode, rulesRequired: agent === 'cursor', rulesPresent: text.includes(BEGIN) && text.includes(END),
+      guidanceReady: agent === 'cursor' ? text.includes(BEGIN) && text.includes(END) : !text.includes(BEGIN),
       hookCommandsPresent: installed.commands.length > 0 && installed.commands.every(command => actualCommands.includes(command))
         && expected.every(command => actualCommands.includes(command)),
       executablePresent: existsSync(installed.bin) && existsSync(installed.node),
+      hookConflicts: inspectHookOwnership(root, agent).conflicts,
       existingBrainMdHook: JSON.stringify(hooks).includes('brain-session-start') };
   });
 }

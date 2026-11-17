@@ -25,7 +25,7 @@ function cli(f, args, input = '', fail = false) {
       if (error) return reject(new Error(stderr || error.message));
       try { resolve(JSON.parse(stdout)); } catch (error) { reject(error); }
     });
-    child.stdin.end(input);
+    child.stdin.end(args[0] === 'hook' ? JSON.stringify({ cwd: f.root, ...JSON.parse(input || '{}') }) : input);
   });
 }
 const input = (turn = 'one', session = 'session') => ({ session_id: session, turn_id: turn, prompt: '报告约定' });

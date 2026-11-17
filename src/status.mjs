@@ -46,7 +46,7 @@ export function formatStatus(report) {
   if (!report.mcp.length) lines.push('Agents: Not configured; run mmx setup');
   for (const item of report.mcp) {
     const rules = report.integrations.find(i => i.agent === item.agent);
-    lines.push(`${names[item.agent] || item.agent}: ${item.configured && item.executablePresent && rules?.rulesPresent && rules?.hookCommandsPresent && rules?.executablePresent ? 'Configured' : 'Configuration needs attention; run mmx doctor'}`);
+    lines.push(`${names[item.agent] || item.agent}: ${item.configured && item.executablePresent && !rules?.hookConflicts?.length && rules?.guidanceReady && rules?.hookCommandsPresent && rules?.executablePresent ? 'Configured' : 'Configuration needs attention; run mmx doctor'}`);
   }
   lines.push(`Connection check: ${report.live ? report.live.accessible ? 'Brain reachable' + (report.mcpProbe?.recall ? '; MCP launch and recall passed' : '') : `Failed: ${report.live.error}` : 'Not run; use mmx status --online'}`);
   if (report.mcpProbe?.connected === false) lines.push(`MCP check: Failed: ${report.mcpProbe.error}`);
