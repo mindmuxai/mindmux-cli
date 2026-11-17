@@ -14,6 +14,39 @@ export const credentialPath = server => join(homeDir(), 'auth', `${createHash('s
 export const timedFetch = (url, options = {}) => fetch(url, { ...options,
   signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(6000)]) : AbortSignal.timeout(6000) });
 
+export function authorizationSuccessPage() {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Connected to MindMux</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    body { align-items: center; background: #f7f7f8; color: #1c1c1f; display: flex; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; justify-content: center; margin: 0; min-height: 100vh; padding: 24px; }
+    main { text-align: center; width: min(100%, 440px); }
+    .brand { display: block; height: auto; margin: 0 auto 28px; width: 132px; }
+    article { background: #fff; border: 1px solid #e5e5e8; border-radius: 14px; box-shadow: 0 10px 28px rgb(20 20 24 / 8%); padding: 34px 32px; }
+    .mark { align-items: center; background: rgb(39 166 68 / 10%); border-radius: 999px; color: #27a644; display: inline-flex; height: 56px; justify-content: center; margin-bottom: 22px; width: 56px; }
+    h1 { font-size: 24px; letter-spacing: -0.03em; line-height: 1.2; margin: 0; }
+    p { color: #6b6b73; font-size: 15px; line-height: 1.6; margin: 12px auto 0; max-width: 310px; }
+  </style>
+</head>
+<body>
+  <main>
+    <img class="brand" src="https://mindmux.ai/logo.svg" alt="MindMux">
+    <article>
+      <div class="mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4.2 4.2L19 6.5"/></svg></div>
+      <h1>Connected to MindMux</h1>
+      <p>Authorization is complete. Return to your terminal to continue.</p>
+    </article>
+  </main>
+</body>
+</html>`;
+}
+
 const activeLocks = new Set();
 function releaseOnSignal(signal) {
   for (const path of activeLocks) rmSync(path, { recursive: true, force: true });
@@ -131,7 +164,7 @@ export async function login(server, { open = true, output = console.error, onAut
       }
       const code = url.searchParams.get('code');
       if (!code) { response.writeHead(400).end('Missing code'); return; }
-      response.writeHead(200, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }).end('MindMux authorization received. Return to the terminal.');
+      response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }).end(authorizationSuccessPage());
       resolveCode(code);
     });
     await new Promise((resolve, reject) => { callbackServer.once('error', reject); callbackServer.listen(0, '127.0.0.1', resolve); });

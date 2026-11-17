@@ -354,7 +354,12 @@ test('OAuth performs discovery, dynamic registration, state validation and PKCE 
       callback.searchParams.set('code', 'valid-code'); callback.searchParams.set('state', 'wrong');
       assert.equal((await fetch(callback)).status, 400);
       callback.searchParams.set('state', url.searchParams.get('state'));
-      assert.equal((await fetch(callback)).status, 200);
+      const response = await fetch(callback);
+      assert.equal(response.status, 200);
+      assert.match(response.headers.get('content-type'), /^text\/html; charset=utf-8/);
+      const page = await response.text();
+      assert.match(page, /<title>Connected to MindMux<\/title>/);
+      assert.match(page, /Authorization is complete\. Return to your terminal to continue\./);
     })();
   } });
   await callbackTask;
