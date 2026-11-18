@@ -4,6 +4,8 @@
 
 Instructions for an agent installing MindMux in the user's current project. The user can delegate this workflow in one message. Browser authorization, Workspace/Project selection, creation consent and host trust still belong to the user. Never treat a successful configuration check as proof that the host loaded the new tools.
 
+Once `mmx` is installed, `mmx --skill` prints its portable operating guide, including the resumable setup workflow. It is read-only and works before login or project initialization; it does not install a Skill into the host.
+
 ## Install once
 
 1. Identify the intended project directory and current host agent (`codex` or `claude-code`). If unclear, ask. Do not configure the user's home directory or unrelated hosts.

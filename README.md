@@ -43,6 +43,7 @@ Want a local Brain without Cloud login? Run `mmx setup --local` instead.
 | `mmx doctor --fix` | Diagnose and repair setup |
 | `mmx switch` | Choose another Brain |
 | `mmx --help` | Show command help |
+| `mmx --skill` | Print the portable Agent Skill for using this CLI |
 
 Run `mmx update --help` for upgrade instructions, including agent automation and manual npm/pnpm upgrades. Restart affected agents after an update. See [upgrade details](docs/installation.md#update).
 
