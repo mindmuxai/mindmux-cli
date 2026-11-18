@@ -2,6 +2,14 @@
 
 [Back to README](../README.md) · [Documentation](README.md)
 
+### Read the CLI Skill
+
+Run `mmx --skill` to print the bundled, self-contained `SKILL.md` as plain Markdown. An agent can read it before using MindMux, even outside a project or before login/setup. It covers binding, index-first navigation, confirmed writes, language, whole-Page updates, conditional hook reviews, and agent-assisted setup/upgrades. Detailed command options remain in `mmx --help` and `mmx update --help`.
+
+The output contains no personal paths, credentials or fixed Brain binding. It performs no network access, writes no files, and does not install/register a Skill or alter `AGENTS.md`/`CLAUDE.md`. Use it by itself; `--json` and subcommands cannot be combined with it. An optional `--project PATH` is accepted but does not inspect that path. The Skill is shipped with the CLI version; upgrade the CLI to obtain revised guidance. This does not replace lifecycle hooks or make unsupported hosts execute them.
+
+### Lifecycle integration
+
 | Agent | Session start | User request | End of turn |
 | --- | --- | --- | --- |
 | Claude Code | SessionStart context, including supported resume/compaction boundaries | UserPromptSubmit retrieval and injection | One Stop review, with recursion protection |

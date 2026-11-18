@@ -13,6 +13,7 @@ import { reviewedWrite, finishReview } from './review.mjs';
 const HELP = `mmx — project Brain operations and agent integrations (v${VERSION})
 
 Setup:
+  mmx --skill                              print the self-contained Agent Skill (Markdown; read-only)
   mmx setup [--agent claude-code,codex]      login, choose Brain, install MCP + rules/hooks
   mmx setup --local --agent codex --yes     local Brain without Cloud login
   mmx setup --json                         return detailed setup results as JSON
@@ -116,7 +117,7 @@ function cloudVersion(value) {
 
 export async function main(argv = process.argv.slice(2)) {
   const options = Object.fromEntries(['project', 'agent', 'brain-id', 'server', 'workspace-id', 'name', 'description', 'id', 'title', 'category', 'status', 'source', 'expected-version', 'change-kind', 'summary', 'kind', 'args', 'review-token', 'outcome', 'reason', 'manager'].map(key => [key, { type: 'string' }]));
-  for (const key of ['local', 'online', 'no-open', 'confirm', 'help', 'version', 'yes', 'migrate', 'json', 'keep-login', 'include-external-data', 'fix', 'check', 'refresh-integrations', 'all-projects', 'non-interactive']) options[key] = { type: 'boolean' };
+  for (const key of ['local', 'online', 'no-open', 'confirm', 'help', 'version', 'skill', 'yes', 'migrate', 'json', 'keep-login', 'include-external-data', 'fix', 'check', 'refresh-integrations', 'all-projects', 'non-interactive']) options[key] = { type: 'boolean' };
   // -agent is an exact single-dash alias, distinct from --agent NAME.
   // Do not rewrite option values or positional content after --.
   const args = [];
@@ -127,6 +128,12 @@ export async function main(argv = process.argv.slice(2)) {
     if (arg.startsWith('--') && options[arg.slice(2)]?.type === 'string' && i + 1 < argv.length) args.push(argv[++i]);
   }
   const { values: flags, positionals: pos } = parseArgs({ args, options, allowPositionals: true, strict: true });
+  if (flags.skill) {
+    if (pos.length || Object.keys(flags).some(key => !['skill', 'project'].includes(key))) throw new Error('Run mmx --skill by itself (optional --project PATH). Output is Markdown, not JSON.');
+    const { readSkill } = await import('./skill.mjs');
+    process.stdout.write(readSkill());
+    return;
+  }
   if (flags['non-interactive']) flags.json = true;
   if (flags.version) { console.log(VERSION); return; }
   if ((flags.help && pos[0] === 'update') || (pos[0] === 'help' && pos[1] === 'update')) { console.log(UPDATE_HELP); return; }
