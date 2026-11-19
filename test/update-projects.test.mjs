@@ -65,7 +65,10 @@ test('bulk refresh discovers legacy backups, deduplicates current and ignores re
   assert.deepEqual(updateProjects(f.root).projects, [f.root]);
   const plan = updateProjects(f.root, { allProjects: true });
   assert.deepEqual(plan.projects, [f.root, other]);
-  assert.ok(plan.warnings.some(w => w.includes(missing)));
+  assert.ok(!plan.warnings.some(w => w.includes(missing)));
+  assert.equal(plan.skipped.length, 2);
+  assert.ok(plan.skipped.some(item => item.project === missing && item.reason === 'missing'));
+  assert.ok(plan.skipped.some(item => item.project === unconfigured && item.reason === 'unconfigured'));
   assert.ok(plan.warnings.some(w => w.includes(link)));
 });
 
@@ -139,4 +142,56 @@ test('already-current updates refresh all recorded projects by default', async t
   const result = await update(f.root, {}, { check: async () => current });
   assert.equal(result.refresh.projects.length, 2);
   for (const root of [f.root, other]) assert.equal(readJson(join(root, '.codex/hooks.json')).hooks.Interrupt[0].hooks[0].timeout, 3);
+});
+
+test('missing history is summarized without warnings or deleting recovery backups', async t => {
+  const f = fixture(t);
+  const missing = Array.from({ length: 25 }, (_, i) => join(f.dir, `expired-test-${i}`));
+  for (const project of missing) backup(f.home, project);
+  const inspect = () => updateProjects(f.root, { allProjects: true, home: f.home });
+  const plan = inspect();
+  assert.equal(plan.skipped.length, 25);
+  assert.deepEqual(plan.warnings, []);
+  const refresh = await refreshUpdateProjects(f.root, { plan }, { refresh: async () => ({ refreshed: false, agents: [] }) });
+  assert.equal(refresh.projects[0].status, 'unconfigured');
+  const output = formatUpdate({ ...current, status: 'current', refresh, warnings: refresh.warnings });
+  assert.match(output, /Skipped 25 missing recorded projects/);
+  assert.match(output, /No managed integrations in 1 project/);
+  assert.ok(output.includes(f.root));
+  for (const path of missing) assert.ok(!output.includes(path));
+  assert.equal(inspect().skipped.length, 25);
+  for (const project of missing) {
+    const hash = createHash('sha256').update(project).digest('hex');
+    assert.equal(readJson(join(f.home, 'backups', hash, '1.json')).project, project);
+  }
+});
+
+test('readable refresh bounds successful paths but retains actionable failures', () => {
+  const projects = Array.from({ length: 30 }, (_, i) => ({ project: `/workspace/project-${i}`, refreshed: true }));
+  projects.push({ project: '/workspace/broken', refreshed: false, error: 'Modified MCP configuration' });
+  const warning = 'Project connections could not be refreshed in /workspace/broken: Modified MCP configuration. Run mmx doctor --fix in that project.';
+  const output = formatUpdate({ status: 'updated', installedVersion: '0.1.7', refresh: { refreshed: true, projects }, warnings: [warning], next: 'Restart agents.' });
+  assert.match(output, /Refreshed integrations in 30 projects/);
+  assert.match(output, /and 25 more/);
+  assert.ok(!output.includes('/workspace/project-29'));
+  assert.ok(output.includes(warning));
+  assert.match(output, /1 project could not be refreshed/);
+});
+
+test('offline CLI refresh reports an unconfigured current directory and keeps skip details in JSON', async t => {
+  const f = fixture(t), missing = join(f.dir, 'expired-project'); backup(f.home, missing);
+  const run = promisify(execFile);
+  const args = [CLI_BIN, '--project', f.root, 'update', '--refresh-integrations'];
+  const options = { env: { ...process.env, MINDMUX_HOME: f.home }, timeout: 10000 };
+  const readable = await run(process.execPath, args, options);
+  assert.equal(readable.stderr, '');
+  assert.match(readable.stdout, /No managed integrations in 1 project/);
+  assert.ok(readable.stdout.includes(f.root));
+  assert.match(readable.stdout, /Skipped 1 missing recorded project/);
+  assert.ok(!readable.stdout.includes(missing));
+  assert.doesNotMatch(readable.stdout, /Restart/);
+  const machine = JSON.parse((await run(process.execPath, [...args, '--json'], options)).stdout);
+  assert.deepEqual(machine.skipped, [{ project: missing, reason: 'missing' }]);
+  assert.deepEqual(machine.warnings, []);
+  assert.equal(machine.projects[0].status, 'unconfigured');
 });

@@ -92,7 +92,7 @@ export async function update(root, flags = {}, dependencies = {}) {
     try {
       const refresh = await (dependencies.refresh || refreshUpdateProjects)(root, { allProjects: true, home: dependencies.home || homeDir() });
       return { ...report, status: 'current', refresh, warnings: refresh.warnings || [],
-        next: refresh.refreshed ? 'Restart your agent/MCP service to load refreshed connections.' : 'No managed connections were refreshed.' };
+        next: refreshNext(refresh) };
     } finally { rmSync(lock, { recursive: true, force: true }); }
   }
   if (!semver.satisfies(process.versions.node, report.node)) throw new Error(`MindMux ${report.latest} requires Node.js ${report.node}. Upgrade Node.js first.`);
@@ -102,7 +102,7 @@ export async function update(root, flags = {}, dependencies = {}) {
   const plan = (dependencies.projects || updateProjects)(root, { allProjects: true, home: dependencies.home || homeDir() });
   if (!flags.yes) {
     if (!dependencies.prompts && !(process.stdin.isTTY && process.stderr.isTTY)) throw new Error('Run mmx update in an interactive terminal, or pass --yes.');
-    const confirmed = await (dependencies.prompts || createSetupPrompts()).confirm(`Update MindMux ${current} → ${report.latest} using ${installation.manager}? Refresh managed connections afterwards in:\n${plan.projects.join('\n')}`);
+    const confirmed = await (dependencies.prompts || createSetupPrompts()).confirm(`Update MindMux ${current} → ${report.latest} using ${installation.manager}? Check ${plan.projects.length} project ${plan.projects.length === 1 ? 'directory' : 'directories'} and refresh managed connections:\n${projectPreview(plan.projects)}`);
     if (!confirmed) return { ...report, status: 'cancelled' };
   }
   const lock = join(dependencies.home || homeDir(), 'update.lock');
@@ -129,14 +129,13 @@ export async function update(root, flags = {}, dependencies = {}) {
     try {
       refresh = JSON.parse(await run(process.execPath, [newBin, '--project', root, 'update', '--refresh-integrations', '--json', '--all-projects'], { timeout: 30000 }));
       warnings.push(...(refresh.warnings || []));
-      if (!refresh.refreshed && !refresh.warnings?.length) warnings.push('No managed connections found. Run mmx setup if needed.');
     } catch (error) { warnings.push(`CLI updated, but project connections could not be refreshed: ${error.message}. Run mmx doctor --fix or mmx setup in this project.`); }
     try {
       const pathVersion = await run('mmx', ['--version']);
       if (pathVersion !== report.latest) warnings.push(`Your shell resolves mmx ${pathVersion}, not ${report.latest}. Check PATH for multiple installations.`);
     } catch { warnings.push('Could not verify mmx on PATH. Check PATH or reopen your terminal.'); }
     return { ...report, status: 'updated', manager: installation.manager, installedVersion, refresh, warnings,
-      next: 'Restart agents/MCP services in refreshed projects. Review any project warnings above.' };
+      next: refresh ? refreshNext(refresh) : 'Resolve the refresh warning, then run mmx update --refresh-integrations.' };
   } finally { rmSync(lock, { recursive: true, force: true }); }
 }
 
@@ -148,8 +147,32 @@ export function formatUpdate(report) {
   return `\n✓ Updated MindMux to ${report.installedVersion}.${formatRefresh(report)}\n${report.warnings.map(warning => `\n• ${warning}`).join('')}\n\n${report.next}`;
 }
 
-function formatRefresh(report) {
-  if (!report.refresh?.refreshed) return '';
-  if (!report.refresh.projects) return '\n✓ Refreshed this project’s integrations.';
-  return report.refresh.projects.filter(project => project.refreshed).map(project => `\n✓ Refreshed integrations: ${project.project}`).join('');
+function projectPreview(projects) {
+  const visible = projects.slice(0, 5).map(project => `  ${project}`);
+  if (projects.length > 5) visible.push(`  … and ${projects.length - 5} more. Use --json for the complete results.`);
+  return visible.join('\n');
+}
+
+function refreshNext(refresh) {
+  if (refresh.refreshed) return 'Restart agents/MCP services in refreshed projects.' + (refresh.warnings?.length ? ' Resolve the warnings above for other projects.' : '');
+  return refresh.warnings?.length ? 'Resolve the warnings above, then run mmx update --refresh-integrations.' : 'No agent restart is needed.';
+}
+
+// Shared by upgrades, already-current updates and offline integration refresh.
+export function formatRefresh(report) {
+  const refresh = report.refresh;
+  if (!refresh) return '';
+  if (!refresh.projects) return refresh.refreshed ? '\n✓ Refreshed this project’s integrations.' : '\n• No managed integrations to refresh.';
+  const refreshed = refresh.projects.filter(project => project.refreshed).map(project => project.project);
+  const unconfigured = [...refresh.projects.filter(project => !project.refreshed && !project.error).map(project => project.project),
+    ...(refresh.skipped || []).filter(project => project.reason === 'unconfigured').map(project => project.project)];
+  const missing = (refresh.skipped || []).filter(project => project.reason === 'missing').length;
+  const failed = refresh.projects.filter(project => project.error).length;
+  const lines = [];
+  if (refreshed.length) lines.push(`✓ Refreshed integrations in ${refreshed.length} ${refreshed.length === 1 ? 'project' : 'projects'}:\n${projectPreview(refreshed)}`);
+  if (unconfigured.length) lines.push(`• No managed integrations in ${unconfigured.length} ${unconfigured.length === 1 ? 'project' : 'projects'}; no changes needed:\n${projectPreview(unconfigured)}`);
+  if (missing) lines.push(`• Skipped ${missing} missing recorded ${missing === 1 ? 'project' : 'projects'}. Details are available with --json.`);
+  if (failed) lines.push(`• ${failed} ${failed === 1 ? 'project' : 'projects'} could not be refreshed. See the warnings below.`);
+  if (!lines.length) lines.push('• No managed integrations to refresh.');
+  return '\n' + lines.join('\n');
 }

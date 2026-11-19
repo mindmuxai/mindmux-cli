@@ -161,9 +161,10 @@ export async function main(argv = process.argv.slice(2)) {
       const result = await (await import('./update-projects.mjs')).refreshUpdateProjects(root, { allProjects: true });
       if (flags.json) output(result);
       else {
-        console.log(result.refreshed ? 'Managed integrations refreshed. Restart your agent.' : 'No managed integrations found.');
-        for (const project of result.projects || []) console.log(`${project.refreshed ? '✓' : '•'} ${project.project}${project.error ? `: ${project.error}` : ''}`);
+        const { formatRefresh } = await import('./update.mjs');
+        console.log(formatRefresh({ refresh: result }).trimStart());
         for (const warning of result.warnings || []) console.error(`Warning: ${warning}`);
+        if (result.refreshed) console.log('\nRestart agents/MCP services in refreshed projects.');
       }
       return;
     }

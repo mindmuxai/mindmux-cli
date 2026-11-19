@@ -7,10 +7,10 @@ import { guardPath } from './host-config.mjs';
 // Recover only previously configured projects from this CLI home's own backups.
 // Never scan arbitrary user directories or restore old backup contents.
 export function updateProjects(root, { allProjects = false, home = homeDir() } = {}) {
-  const projects = [realpathSync(root)], warnings = [];
-  if (!allProjects) return { projects, warnings };
+  const projects = [realpathSync(root)], warnings = [], skipped = [];
+  if (!allProjects) return { projects, warnings, skipped };
   const backups = join(home, 'backups');
-  if (!existsSync(backups)) return { projects, warnings };
+  if (!existsSync(backups)) return { projects, warnings, skipped };
   if (lstatSync(backups).isSymbolicLink()) throw new Error(`Refusing backup directory symlink: ${backups}`);
   for (const hash of readdirSync(backups).sort()) {
     if (!/^[a-f0-9]{64}$/.test(hash)) continue;
@@ -31,16 +31,24 @@ export function updateProjects(root, { allProjects = false, home = homeDir() } =
     }
     if (!known) { warnings.push(`Could not identify the project for backup ${hash}; it was not refreshed.`); continue; }
     if (projects.includes(known)) continue;
-    if (!existsSync(known)) { warnings.push(`Recorded project no longer exists: ${known}. Skipped.`); continue; }
+    // A removed project is normal history, not a failed refresh. Keep backups for
+    // recovery and expose the details in JSON without warning on every update.
+    try { lstatSync(known); }
+    catch (error) {
+      if (error.code === 'ENOENT') skipped.push({ project: known, reason: 'missing' });
+      else warnings.push(`Cannot inspect recorded project ${known}: ${error.message}`);
+      continue;
+    }
     try {
       if (realpathSync(known) !== known) throw new Error('Project path now resolves through a symlink.');
       const setup = join(known, '.mindmux/cli/setup.json'), integrations = join(known, '.mindmux/cli/integrations.json');
       guardPath(known, setup); guardPath(known, integrations);
       const agents = [...Object.keys(readJson(setup, {}).agents || {}), ...Object.keys(readJson(integrations, {}))];
       if (agents.length) projects.push(known);
+      else skipped.push({ project: known, reason: 'unconfigured' });
     } catch (error) { warnings.push(`Cannot inspect recorded project ${known}: ${error.message}`); }
   }
-  return { projects, warnings };
+  return { projects, warnings, skipped };
 }
 
 export async function refreshUpdateProjects(root, options = {}, dependencies = {}) {
@@ -50,11 +58,11 @@ export async function refreshUpdateProjects(root, options = {}, dependencies = {
   for (const project of plan.projects) {
     try {
       const result = await refresh(project);
-      projects.push({ project, ...result });
+      projects.push({ project, ...result, status: result.refreshed ? 'refreshed' : 'unconfigured' });
     } catch (error) {
-      projects.push({ project, refreshed: false, error: error.message });
+      projects.push({ project, refreshed: false, status: 'failed', error: error.message });
       warnings.push(`Project connections could not be refreshed in ${project}: ${error.message}. Run mmx doctor --fix in that project.`);
     }
   }
-  return { refreshed: projects.some(project => project.refreshed), projects, warnings };
+  return { refreshed: projects.some(project => project.refreshed), projects, skipped: plan.skipped || [], warnings };
 }
