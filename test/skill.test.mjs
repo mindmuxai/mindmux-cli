@@ -68,7 +68,11 @@ test('--skill never runs the passive update check, including rejected command co
 test('npm package includes the Skill and its reader works after relocation', async t => {
   const f = fixture(t);
   const { stdout } = await run('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], { cwd: root });
-  const paths = new Set(JSON.parse(stdout)[0].files.map(file => file.path));
+  // npm 10/11 return an array; npm 12 keys the result by package name.
+  const packed = JSON.parse(stdout);
+  const manifest = Array.isArray(packed) ? packed[0] : packed['@mindmux/cli'];
+  assert.ok(Array.isArray(manifest?.files), 'npm pack must return a package file manifest');
+  const paths = new Set(manifest.files.map(file => file.path));
   assert.ok(paths.has('skills/mindmux-cli/SKILL.md'));
   assert.ok(paths.has('src/skill.mjs'));
   const relocated = join(f.dir, 'relocated-package');
