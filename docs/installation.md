@@ -59,6 +59,8 @@ After installation, it verifies the new CLI version and runs the new CLI to refr
 
 When the running CLI is already at or above the latest registry version, `mmx update` still refreshes owned project connections using that running CLI without reinstalling or requiring npm/pnpm ownership detection. This repairs stale paths after an external npm, pnpm or mise upgrade. `--check` stays read-only and never refreshes files. A new package version still requires a supported owning installer; mise-managed packages may require upgrading through mise first.
 
+Confirmation and results show at most five paths per project group, with counts for the remaining paths. Results distinguish refreshed projects, directories without managed integrations, and failed refreshes. Missing historical projects are summarized as normal skips rather than individual warnings; recovery backups are preserved. `mmx update --yes --json` includes complete per-project results and `refresh.skipped` entries (`missing` or `unconfigured`). The offline `mmx update --refresh-integrations --json` command exposes the same refresh details without checking a release. Inspection errors and refresh failures remain actionable warnings.
+
 For older CLI versions without `update`, or for a manual upgrade:
 
 ```bash

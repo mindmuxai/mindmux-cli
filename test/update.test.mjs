@@ -190,6 +190,9 @@ test('interactive menu exits after an update instead of reusing the old process'
 
 test('Codex Interrupt respects the three-second limit on install and refresh of older hooks', async t => {
   const f = fixture(t);
+  const oldHome = process.env.MINDMUX_HOME;
+  process.env.MINDMUX_HOME = f.home;
+  t.after(() => { if (oldHome === undefined) delete process.env.MINDMUX_HOME; else process.env.MINDMUX_HOME = oldHome; });
   connect(f.root, 'codex');
   connect(f.root, 'claude-code');
   const path = join(f.root, '.codex/hooks.json');
@@ -219,4 +222,18 @@ test('updates request all-project refresh by default from the newly installed CL
   assert.equal(result.status, 'updated');
   const refresh = calls.find(call => call.args.includes('--refresh-integrations'));
   assert.ok(refresh.args.includes('--all-projects'));
+});
+
+test('upgrade confirmation bounds the project list and cancellation never installs', async t => {
+  const f = fixture(t), { deps, calls } = updateDependencies(f);
+  const projects = Array.from({ length: 40 }, (_, i) => join(f.dir, `project-${i}`));
+  const result = await update(f.root, {}, { ...deps, projects: () => ({ projects, warnings: [] }), prompts: { confirm: async message => {
+    assert.match(message, /Check 40 project directories/);
+    assert.match(message, /and 35 more/);
+    assert.ok(message.includes(projects[0]));
+    assert.ok(!message.includes(projects[39]));
+    return false;
+  } } });
+  assert.equal(result.status, 'cancelled');
+  assert.deepEqual(calls, []);
 });
