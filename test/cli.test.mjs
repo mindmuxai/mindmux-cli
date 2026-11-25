@@ -318,7 +318,8 @@ test('Cloud uses real SDK transport, validates binding, preserves expectedVersio
   failCreate = true;
   await cli(f, ['setup', '--agent', 'codex', '--workspace-id', 'workspace', '--name', 'Lost response test', '--confirm', '--yes'], '', { fail: true });
   const uncertain = await cli(f, ['setup', '--agent', 'codex', '--workspace-id', 'workspace', '--name', 'Lost response test', '--confirm', '--yes'], '', { fail: true });
-  assert.equal(uncertain.stderr, '');
+  // JSON errors stay on stdout; host capability warnings may still use stderr.
+  assert.doesNotMatch(uncertain.stderr, /^mmx:/m);
   assert.match(JSON.parse(uncertain.stdout).error, /unknown outcome/);
   assert.equal(calls.filter(call => call.name === 'create_project').length, 2);
 });
