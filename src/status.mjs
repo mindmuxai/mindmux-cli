@@ -1,3 +1,4 @@
+import { automation } from './automation.mjs';
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { binding, preferences, readJson } from './storage.mjs';
@@ -17,7 +18,7 @@ export async function status(root, flags = {}, dependencies = {}) {
     .map(name => readJson(join(runtime, name), {}))
     .filter(item => item.targetKey === key && (!manifest.updatedAt || item.time >= manifest.updatedAt))
     .sort((a, b) => b.time.localeCompare(a.time)) : [];
-  const report = { project: root, binding: target,
+  const report = { project: root, binding: target, automation: automation(root),
     workspace: target.kind === 'cloud' ? preferences(root).cloudBrain?.workspaceName : undefined,
     credentialsPresent: target.kind === 'cloud' ? Boolean(readJson(credentialPath(target.server), {}).tokens) : undefined,
     mcp: inspectMcp(root), integrations: inspectIntegrations(root), receipts,
@@ -39,6 +40,7 @@ export async function status(root, flags = {}, dependencies = {}) {
 export function formatStatus(report) {
   const names = { 'claude-code': 'Claude Code', codex: 'Codex', cursor: 'Cursor' };
   const lines = ['MindMux status', '', `Brain: ${report.binding.kind === 'cloud' ? report.binding.name || report.binding.brainId : report.binding.kind === 'local' ? report.binding.directory : 'Not selected'}`];
+  lines.push(`Automatic memory: ${report.automation?.paused ? 'Paused; run mmx resume to restore automatic hooks' : 'Enabled'}`);
   if (report.binding.kind === 'cloud') {
     lines.push(`Workspace: ${report.workspace || 'Not recorded (choose it with mmx switch)'}`);
     lines.push(`Login: ${report.credentialsPresent ? 'Saved credentials (not proof of a valid session)' : 'Not signed in; run mmx login'}`);

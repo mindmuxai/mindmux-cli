@@ -1,3 +1,6 @@
+import { OPTIONS, schema, validateBrainArguments } from './command-schema.mjs';
+import { CliError, usageError, errorResult } from './errors.mjs';
+import { automation, setAutomation } from './automation.mjs';
 import { VERSION } from './version.mjs';
 import { parseArgs } from 'node:util';
 import { resolve, join, basename } from 'node:path';
@@ -13,6 +16,8 @@ import { reviewedWrite, finishReview } from './review.mjs';
 const HELP = `mmx — project Brain operations and agent integrations (v${VERSION})
 
 Setup:
+  mmx schema [COMMAND...]                  inspect command metadata as JSON (offline)
+  mmx pause | resume                       manually pause/resume automatic memory in this project
   mmx --skill                              print the self-contained Agent Skill (Markdown; read-only)
   mmx setup [--agent claude-code,codex]      login, choose Brain, install MCP + rules/hooks
   mmx setup --local --agent codex --yes     local Brain without Cloud login
@@ -99,25 +104,24 @@ configuration checks do not prove that a running agent loaded or executed its ho
 `;
 
 async function stdin(limit = 1024 * 1024) {
-  if (process.stdin.isTTY) throw new Error('Pipe content through stdin.');
+  if (process.stdin.isTTY) throw usageError('Pipe content through stdin.');
   let value = '';
   for await (const chunk of process.stdin) {
     value += chunk;
-    if (Buffer.byteLength(value) > limit) throw new Error('stdin exceeds 1 MiB.');
+    if (Buffer.byteLength(value) > limit) throw usageError('stdin exceeds 1 MiB.');
   }
   return value;
 }
 const output = value => console.log(JSON.stringify(value, null, 2));
-const need = (value, name) => { if (typeof value !== 'string' || !value.trim()) throw new Error(`${name} is required.`); return value; };
+const need = (value, name) => { if (typeof value !== 'string' || !value.trim()) throw usageError(`${name} is required.`); return value; };
 const body = async () => need((await stdin()).trim(), 'Nonempty stdin');
 function cloudVersion(value) {
-  if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) throw new Error('--expected-version must be a positive integer for Cloud updates.');
+  if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) throw usageError('--expected-version must be a positive integer for Cloud updates.');
   return Number(value);
 }
 
 export async function main(argv = process.argv.slice(2)) {
-  const options = Object.fromEntries(['project', 'agent', 'brain-id', 'server', 'workspace-id', 'name', 'description', 'id', 'title', 'category', 'status', 'source', 'expected-version', 'change-kind', 'summary', 'kind', 'args', 'review-token', 'outcome', 'reason', 'manager'].map(key => [key, { type: 'string' }]));
-  for (const key of ['local', 'online', 'no-open', 'confirm', 'help', 'version', 'skill', 'yes', 'migrate', 'json', 'keep-login', 'include-external-data', 'fix', 'check', 'refresh-integrations', 'all-projects', 'non-interactive']) options[key] = { type: 'boolean' };
+  const options = OPTIONS;
   // -agent is an exact single-dash alias, distinct from --agent NAME.
   // Do not rewrite option values or positional content after --.
   const args = [];
@@ -129,17 +133,22 @@ export async function main(argv = process.argv.slice(2)) {
   }
   const { values: flags, positionals: pos } = parseArgs({ args, options, allowPositionals: true, strict: true });
   if (flags.skill) {
-    if (pos.length || Object.keys(flags).some(key => !['skill', 'project'].includes(key))) throw new Error('Run mmx --skill by itself (optional --project PATH). Output is Markdown, not JSON.');
+    if (pos.length || Object.keys(flags).some(key => !['skill', 'project'].includes(key))) throw usageError('Run mmx --skill by itself (optional --project PATH). Output is Markdown, not JSON.');
     const { readSkill } = await import('./skill.mjs');
     process.stdout.write(readSkill());
     return;
   }
   if (flags['non-interactive']) flags.json = true;
+  if (pos[0] === 'schema' && !flags.help) {
+    if (Object.keys(flags).some(key => !['json', 'project', 'non-interactive'].includes(key))) throw usageError('Run mmx schema [COMMAND...] [--json].');
+    output(schema(pos.slice(1))); return;
+  }
   if (flags.version) { console.log(VERSION); return; }
   if ((flags.help && pos[0] === 'update') || (pos[0] === 'help' && pos[1] === 'update')) { console.log(UPDATE_HELP); return; }
   if (flags.help || pos[0] === 'help' || (!pos.length && (!process.stdin.isTTY || !process.stderr.isTTY || flags.json || flags.yes))) { console.log(HELP); return; }
-  const root = realpathSync(flags.project ? resolve(flags.project) : projectRoot());
-  process.chdir(root);
+  let root;
+  try { root = realpathSync(flags.project ? resolve(flags.project) : projectRoot()); process.chdir(root); }
+  catch (cause) { throw new CliError('PROJECT_UNAVAILABLE', 'Project directory is unavailable.', { next: 'Use --project with an existing project directory.', cause }); }
   if (!pos.length) {
     const { runMenu } = await import('./menu.mjs');
     await runMenu(root, { run: async args => {
@@ -150,12 +159,12 @@ export async function main(argv = process.argv.slice(2)) {
   }
   const [command, action, ...rest] = pos;
   for (const key of ['title', 'summary', 'source']) {
-    if (flags[key] && /[\r\n\0]/.test(flags[key])) throw new Error(`--${key} must be a single line without NUL characters.`);
+    if (flags[key] && /[\r\n\0]/.test(flags[key])) throw usageError(`--${key} must be a single line without NUL characters.`);
   }
   if (command === 'update') {
-    if (action || rest.length) throw new Error('Run mmx update [--check] [--yes] [--json] [--manager npm|pnpm].');
+    if (action || rest.length) throw usageError('Run mmx update [--check] [--yes] [--json] [--manager npm|pnpm].');
     if (flags['refresh-integrations']) {
-      if (flags.check || flags.manager) throw new Error('Integration refresh cannot be combined with update selection flags.');
+      if (flags.check || flags.manager) throw usageError('Integration refresh cannot be combined with update selection flags.');
       // Older updaters call this entry without --all-projects after installing a release.
       // Default to the full recorded scope so their first upgrade also repairs other projects.
       const result = await (await import('./update-projects.mjs')).refreshUpdateProjects(root, { allProjects: true });
@@ -174,6 +183,15 @@ export async function main(argv = process.argv.slice(2)) {
     if (result.status === 'manual') process.exitCode = 1;
     return result;
   }
+  if (command === 'pause' || command === 'resume') {
+    if (action || rest.length || Object.keys(flags).some(key => !['project', 'json'].includes(key))) throw usageError('Run mmx pause or mmx resume manually in the intended project.');
+    const state = setAutomation(root, command === 'pause');
+    const note = state.paused
+      ? 'Automatic memory is paused for this project. Explicit Brain commands still work. Run mmx resume to restore automatic hooks. Already delivered context and dispatched operations cannot be recalled.'
+      : 'Automatic memory is enabled for future hook events. Skipped tasks will not be replayed.';
+    if (flags.json) output({ ...state, note }); else console.log(note);
+    return;
+  }
   const selectedServer = () => serverUrl(flags.server || preferences(root).mindmuxCli?.server || readJson(join(homeDir(), 'config.json'), {}).server || DEFAULT_SERVER);
   if (command === 'clean') {
     const { clean } = await import('./clean.mjs');
@@ -186,7 +204,10 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === 'setup' || command === 'remove' || command === 'switch') {
     const { setup, removeSetup, switchBrain } = await import('./setup.mjs');
     const result = await (command === 'switch' ? switchBrain(root, flags) : command === 'setup' ? setup(root, flags) : removeSetup(root, flags));
-    if (result.status === 'error') process.exitCode = 1;
+    if (result.status === 'error') {
+      Object.assign(result, { ...errorResult(new Error(result.error)), ...result });
+      process.exitCode = 1;
+    }
     if (flags.json) output(result);
     else if (command === 'remove') console.log(result.removed.length ? `Removed connections for ${result.removed.join(', ')}. Brain data, binding and login are kept.` : result.note);
     else {
@@ -215,7 +236,9 @@ export async function main(argv = process.argv.slice(2)) {
       return;
     }
     await login(server, { open: !flags['no-open'] });
-    writeJson(join(homeDir(), 'config.json'), { server }); return;
+    writeJson(join(homeDir(), 'config.json'), { server });
+    if (flags.json) output({ signedIn: true, server });
+    return;
   }
   if (command === 'logout') {
     const { pendingLogin } = await import('./login-session.mjs');
@@ -224,7 +247,7 @@ export async function main(argv = process.argv.slice(2)) {
     output({ signedOut: true, note: 'Removed this CLI’s local credentials. This does not revoke other clients or server grants.' }); return;
   }
   if (command === 'init') {
-    if (!flags.local) throw new Error('Choose --local explicitly, or run brain bind --brain-id <id> for Cloud.');
+    if (!flags.local) throw usageError('Choose --local explicitly, or run brain bind --brain-id <id> for Cloud.');
     localCommand(root, ['init', '--no-wire']);
     mergePreferences(root, { cloudBrain: { ...preferences(root).cloudBrain, enabled: false } });
     ignoreRuntime(root);
@@ -262,13 +285,14 @@ export async function main(argv = process.argv.slice(2)) {
   }
   if (command === 'project' && action === 'create') {
     const workspaceId = need(flags['workspace-id'], '--workspace-id'), name = need(flags.name, '--name');
-    if (!flags.confirm) throw new Error('New projects are visible to all Workspace members. Pass --confirm after selecting this Workspace and Project name.');
+    if (!flags.confirm) throw usageError('New projects are visible to all Workspace members. Pass --confirm after selecting this Workspace and Project name.');
     output(await withCloud(selectedServer(), call => call('create_project', { workspaceId, name, description: flags.description || '' }))); return;
   }
   if (command === 'mcp') {
     if (action === 'call') {
-      const args = JSON.parse(flags.args || '{}');
-      if (!args || Array.isArray(args) || typeof args !== 'object') throw new Error('--args must be a JSON object.');
+      let args;
+      try { args = JSON.parse(flags.args || '{}'); } catch { throw usageError('--args must be valid JSON.'); }
+      if (!args || Array.isArray(args) || typeof args !== 'object') throw usageError('--args must be a JSON object.');
       output(await withCloud(selectedServer(), call => call(need(rest[0], 'tool name'), args))); return;
     }
     if (action === 'tools') {
@@ -277,7 +301,7 @@ export async function main(argv = process.argv.slice(2)) {
     }
   }
   if (command === 'brain' && action === 'bind') {
-    if (flags.local && flags['brain-id']) throw new Error('Choose --local or --brain-id, not both.');
+    if (flags.local && flags['brain-id']) throw usageError('Choose --local or --brain-id, not both.');
     const prefs = preferences(root);
     if (flags.local) {
       localCommand(root, ['brain-dir']);
@@ -290,13 +314,14 @@ export async function main(argv = process.argv.slice(2)) {
     }
     ignoreRuntime(root); output(binding(root)); return;
   }
-  if (command === 'brain' && action === 'status') { output(binding(root)); return; }
+  if (command === 'brain' && action === 'status') { validateBrainArguments(action, rest, flags); output({ ...binding(root), automation: automation(root) }); return; }
   if (command === 'brain' && action === 'review') {
+    validateBrainArguments(action, rest, flags);
     output(await finishReview(root, { token: flags['review-token'], outcome: flags.outcome, reason: flags.reason, id: flags.id })); return;
   }
   if (command === 'brain') {
-    // Validate operation before opening a cloud connection.
-    if (!['index', 'reindex', 'list', 'roots', 'read', 'read-root', 'search', 'recall', 'create', 'update', 'append', 'archive', 'update-root'].includes(action)) throw new Error('Unknown brain command. Run mmx help.');
+    // Validate before opening a connection or waiting on stdin.
+    validateBrainArguments(action, rest, flags);
     let content;
     if (['create', 'update', 'update-root'].includes(action)) content = await body();
     const result = await withBrain(root, async brain => {
@@ -312,17 +337,12 @@ export async function main(argv = process.argv.slice(2)) {
         case 'recall': return recall(brain, rest.join(' '));
         case 'create': {
           const id = need(flags.id, '--id'), title = need(flags.title, '--title'), category = need(flags.category, '--category');
-          if (!/^[a-z0-9][a-z0-9-]*$/.test(id) || /[\r\n]/.test(title)) throw new Error('Invalid page id or multiline title.');
-          if (!['project', 'concept', 'decision', 'person', 'reference'].includes(category)) throw new Error('Invalid page category.');
-          if (flags.status && !['active', 'draft', 'archived'].includes(flags.status)) throw new Error('Invalid page status.');
           return mutate({ kind: 'page', id }, () => brain.create({ id, title, category, status: flags.status || 'active', compiledTruth: content, creationSummary: flags.source || 'Captured through MindMux CLI' }));
         }
         case 'update': {
           const expected = need(flags['expected-version'], '--expected-version');
           const changeKind = flags['change-kind'] ?? 'substantive';
-          if (!['correction', 'substantive'].includes(changeKind)) throw new Error('--change-kind must be correction or substantive.');
-          if (changeKind === 'correction' && (flags.summary !== undefined || flags.source !== undefined)) throw new Error('A correction must omit --summary and --source; it does not add a Timeline entry.');
-          if (changeKind === 'correction' && brain.target.kind !== 'cloud') throw new Error('Timeline-free correction is supported only for Cloud Brain. Local brain.md updates require --change-kind substantive and --summary.');
+          if (changeKind === 'correction' && brain.target.kind !== 'cloud') throw usageError('Timeline-free correction is supported only for Cloud Brain. Local brain.md updates require --change-kind substantive and --summary.');
           const timeline = changeKind === 'substantive'
             ? { timelineEntry: { kind: 'decision', summary: need(flags.summary, '--summary'), source: flags.source || 'MindMux CLI' } }
             : {};
@@ -331,7 +351,6 @@ export async function main(argv = process.argv.slice(2)) {
         }
         case 'append': {
           const kind = flags.kind || 'evidence';
-          if (!['decision', 'evidence', 'reversal', 'note'].includes(kind)) throw new Error('Invalid timeline kind.');
           return mutate({ kind: 'page', id: need(rest[0], 'page id') }, () => brain.append({ id: rest[0], entry: { kind, summary: need(flags.summary, '--summary'), source: flags.source || 'MindMux CLI' } }));
         }
         case 'archive': return mutate({ kind: 'page', id: need(rest[0], 'page id') }, () => brain.archive(rest[0]));
@@ -344,5 +363,5 @@ export async function main(argv = process.argv.slice(2)) {
     });
     output(result); return;
   }
-  throw new Error('Unknown command. Run mmx help.');
+  throw usageError('Unknown command. Run mmx schema or mmx help.');
 }

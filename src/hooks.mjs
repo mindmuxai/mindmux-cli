@@ -1,3 +1,4 @@
+import { automation, automationMatches } from './automation.mjs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { binding, readJson, writeJson } from './storage.mjs';
@@ -66,20 +67,21 @@ async function codexHook(root, event, input) {
     additionalContext: context } };
 }
 
-export async function handleHook(root, agent, event, input) {
+async function handleHookActive(root, agent, event, input) {
   if (!['cursor', 'claude-code', 'codex'].includes(agent)) throw new Error('Hooks support cursor, claude-code and codex.');
   if (!['session-start', 'prompt', 'pre-tool', 'stop', 'interrupt'].includes(event)) throw new Error('Unknown hook event.');
   if (agent !== 'cursor' && !hookProjectMatches(root, input)) return {};
   if (agent === 'codex') return codexHook(root, event, input);
   const path = statePath(root, agent, input);
   let state = readJson(path, {});
-  const key = targetKey(root);
+  const key = targetKey(root) + ':' + automation(root).revision;
   if (state.targetKey !== key) state = { targetKey: key };
   const outputContext = (context, hookEventName) => agent === 'cursor' ? { additional_context: context }
     : { hookSpecificOutput: { hookEventName, additionalContext: context } };
   if (event === 'stop') {
-    if (state.stopped || input.stop_hook_active || Number(input.loop_count || 0) > 0 || ['aborted', 'error'].includes(input.status)) return {};
+    if (state.turnActive !== true || state.stopped || input.stop_hook_active || Number(input.loop_count || 0) > 0 || ['aborted', 'error'].includes(input.status)) return {};
     state.stopped = true;
+    state.turnActive = false;
     writeJson(path, state);
     recordHook(root, agent, event, { status: 'review-requested' });
     return agent === 'cursor' ? { followup_message: MEMORY_CHECK } : { decision: 'block', reason: MEMORY_CHECK };
@@ -93,9 +95,12 @@ export async function handleHook(root, agent, event, input) {
       note: 'Returned to host; model usage is not observable.' });
     return outputContext(state.context);
   }
-  const stopped = false;
+  // Only a prompt arms an end-of-turn check. Startup/compaction can retain
+  // a current turn, but missing or old-revision state must not start one.
+  const turnActive = event === 'prompt' || state.turnActive === true;
+  const stopped = event === 'prompt' ? false : Boolean(state.stopped);
   // Invalidate previous-turn context before any retrieval that may fail.
-  writeJson(path, { targetKey: key, stopped });
+  writeJson(path, { targetKey: key, stopped, turnActive });
   let result;
   try { result = binding(root).kind === 'unbound' ? { context: unboundContext, pageIds: [] }
     : await withBrain(root, brain => recall(brain, event === 'prompt' ? String(input.prompt || '').slice(0, 12000) : '', { includePolicy: agent === 'cursor', maxBytes: agent === 'cursor' ? 8192 : hookBudget(root) }));
@@ -105,7 +110,7 @@ export async function handleHook(root, agent, event, input) {
     throw error;
   }
   if (agent === 'claude-code') result.context = hookContext(root, result.context);
-  state = { targetKey: key, context: result.context, pageIds: result.pageIds, retrievedPageIds: result.retrievedPageIds || [], indexCount: result.count, indexSource: result.indexSource, recalledAt: Date.now(), stopped,
+  state = { targetKey: key, context: result.context, pageIds: result.pageIds, retrievedPageIds: result.retrievedPageIds || [], indexCount: result.count, indexSource: result.indexSource, recalledAt: Date.now(), stopped, turnActive,
     delivered: agent !== 'cursor' || event === 'session-start' };
   writeJson(path, state);
   recordHook(root, agent, event, { status: state.delivered ? 'emitted' : 'retrieved', pageIds: result.pageIds,
@@ -114,17 +119,34 @@ export async function handleHook(root, agent, event, input) {
   return outputContext(result.context, event === 'session-start' ? 'SessionStart' : 'UserPromptSubmit');
 }
 
+export async function handleHook(root, agent, event, input) {
+  const state = automation(root);
+  if (state.paused) return {};
+  const result = await handleHookActive(root, agent, event, input);
+  return automationMatches(root, state.revision) ? result : {};
+}
+
 export async function runHook(root, agent, event, input) {
   if (['claude-code', 'codex'].includes(agent) && !hookProjectMatches(root, input)) return {};
+  let revision;
+  try {
+    const state = automation(root);
+    if (state.paused) return {};
+    revision = state.revision;
+  } catch { return {}; } // Corrupt policy must never reactivate automatic memory.
+  const fallback = () => {
+    try { if (!automationMatches(root, revision)) return {}; } catch { return {}; }
+    return ['codex', 'claude-code'].includes(agent) && ['session-start', 'prompt'].includes(event) ? failureContext(root, event) : agent === 'cursor' && event === 'prompt' ? { continue: true } : {};
+  };
   // No failing hook should block a task. Bound the entire process as well as individual requests.
   const timer = setTimeout(() => {
     try { recordHook(root, agent, event, { status: 'timeout', error: 'Hook exceeded 8 seconds.' }); } catch {}
-    console.log(JSON.stringify(['codex', 'claude-code'].includes(agent) && ['session-start', 'prompt'].includes(event) ? failureContext(root, event) : agent === 'cursor' && event === 'prompt' ? { continue: true } : {}));
+    console.log(JSON.stringify(fallback()));
     process.exit(0);
   }, 8000);
   try { return await handleHook(root, agent, event, input); }
   catch (error) {
     try { recordHook(root, agent, event, { status: 'error', error: error.message.slice(0, 500) }); } catch {}
-    return ['codex', 'claude-code'].includes(agent) && ['session-start', 'prompt'].includes(event) ? failureContext(root, event) : agent === 'cursor' && event === 'prompt' ? { continue: true } : {};
+    return fallback();
   } finally { clearTimeout(timer); }
 }

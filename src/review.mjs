@@ -1,3 +1,5 @@
+import { CliError } from './errors.mjs';
+import { automation, automationMatches } from './automation.mjs';
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync, rmdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -31,7 +33,7 @@ async function locked(root, session, run) {
 const sessionKey = input => typeof input.session_id === 'string' && input.session_id.trim() ? hash(input.session_id) : null;
 const turnId = input => typeof input.turn_id === 'string' && input.turn_id.trim() ? input.turn_id : null;
 function active(root, state, token) {
-  if (!open(state) || state.targetKey !== targetKey(root) || state.token !== token) throw new Error('Memory review token is stale, expired, closed or belongs to another Brain.');
+  if (!automationMatches(root, state.automationRevision || 'initial') || !open(state) || state.targetKey !== targetKey(root) || state.token !== token) throw new Error('Memory review token is stale, expired, closed or belongs to another Brain.');
 }
 function tokenSession(root, token) {
   if (!/^[a-f0-9]{64}$/.test(token || '')) throw new Error('A valid --review-token is required.');
@@ -45,12 +47,15 @@ function diagnostic(root, state, status, error) {
 }
 
 export async function beginReview(root, input) {
+  const policy = automation(root);
+  if (policy.paused) return null;
   const session = sessionKey(input), turn = turnId(input);
   if (!session || !turn || binding(root).kind === 'unbound') return null;
   return locked(root, session, (state, save) => {
-    if (state.turnId === turn && state.targetKey === targetKey(root)) return open(state) ? state : null;
+    if (!automationMatches(root, policy.revision)) return null;
+    if (state.turnId === turn && state.targetKey === targetKey(root) && (state.automationRevision || 'initial') === policy.revision) return open(state) ? state : null;
     state = { token: randomBytes(32).toString('hex'), session, turnId: turn, targetKey: targetKey(root),
-      status: 'active', expiresAt: Date.now() + lifetime, writes: [] };
+      automationRevision: policy.revision, status: 'active', expiresAt: Date.now() + lifetime, writes: [] };
     save(state);
     writeJson(join(directory(root), 'tokens', `${state.token}.json`), { session });
     return state;
@@ -60,14 +65,14 @@ export async function beginReview(root, input) {
 export async function currentReview(root, input) {
   const session = sessionKey(input);
   if (!session) return null;
-  return locked(root, session, state => open(state) && state.targetKey === targetKey(root) && (!turnId(input) || state.turnId === turnId(input)) ? state : null);
+  return locked(root, session, state => automationMatches(root, state.automationRevision || 'initial') && open(state) && state.targetKey === targetKey(root) && (!turnId(input) || state.turnId === turnId(input)) ? state : null);
 }
 
 export async function stopReview(root, input) {
   const session = sessionKey(input), turn = turnId(input);
   if (!session || !turn) return { status: 'review-unavailable' };
   return locked(root, session, (state, save) => {
-    if (state.turnId !== turn || state.targetKey !== targetKey(root)) return { status: 'review-unavailable' };
+    if (!automationMatches(root, state.automationRevision || 'initial') || state.turnId !== turn || state.targetKey !== targetKey(root)) return { status: 'review-unavailable' };
     if (['aborted', 'error'].includes(input.status) || input.hook_event_name === 'Interrupt') {
       state.status = 'aborted'; save(state); return { status: 'review-aborted' };
     }
@@ -121,7 +126,7 @@ export async function reviewedWrite(root, token, brain, resource, run) {
       state.error = `${written ? 'Write completed but verification failed' : 'Write failed'}: ${error.message}`;
       state.failures = [...(state.failures || []).filter(item => item.kind !== resource.kind || item.id !== resource.id), { ...resource, error: state.error }];
       save(state); diagnostic(root, state, 'review-failed', state.error);
-      throw new Error(state.error);
+      throw new CliError(error instanceof CliError ? error.code : 'WRITE_FAILED', state.error, { next: error.next, outcome: written ? 'unknown' : error.outcome || 'unknown', cause: error });
     }
   });
 }
@@ -133,7 +138,7 @@ export async function finishReview(root, { token, outcome, reason, id }) {
   return locked(root, session, async (state, save) => {
     const receipt = { outcome, reason: reason.trim(), ...(id ? { id } : {}) };
     // Permit an exact retry after completion, but never rewrite an old receipt.
-    if (state.token === token && state.targetKey === targetKey(root) && state.expiresAt > Date.now() && state.status === 'completed'
+    if (automationMatches(root, state.automationRevision || 'initial') && state.token === token && state.targetKey === targetKey(root) && state.expiresAt > Date.now() && state.status === 'completed'
       && JSON.stringify(state.receipt) === JSON.stringify(receipt)) return { reviewed: true, outcome };
     active(root, state, token);
     try {

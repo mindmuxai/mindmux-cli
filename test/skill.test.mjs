@@ -44,7 +44,7 @@ test('--skill rejects commands and incompatible flags before any mutation', asyn
   const f = fixture(t);
   for (const args of [['setup', '--skill'], ['clean', '--yes', '--skill'], ['--skill', '--json'], ['--skill', '-agent']]) {
     await assert.rejects(run(process.execPath, [bin, ...args], { cwd: f.project, env: f.env }), error => {
-      if (args.includes('-agent')) {
+      if (args.includes('-agent') || args.includes('--json')) {
         assert.equal(JSON.parse(error.stdout).status, 'error');
         assert.match(JSON.parse(error.stdout).error, /Run mmx --skill by itself/);
       } else {
