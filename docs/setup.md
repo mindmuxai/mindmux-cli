@@ -135,3 +135,21 @@ Codex and Claude Code hook commands validate the host event's `cwd` before readi
 Claude Code can load the main checkout's `.claude/settings.local.json` together with a worktree's local file. MindMux keeps these hooks scoped to their own project at runtime. Setup and doctor also inspect known Claude disabling settings, including `disableAllHooks` and the standard managed-settings file's `allowManagedHooksOnly`, without changing user or admin policy. Command-line overrides, remotely managed policy and actual host trust still require verification in the client.
 
 Historical MindMux commands copied from another machine may have no valid local ownership record. Setup, refresh and cleanup report a migration conflict rather than delete unknown handlers or claim success. Review the named configuration file, explicitly remove only the obsolete MindMux handlers (preserving other configuration), or restore the matching local installation records, then retry. Cleanup can recover current generated hooks after a connect-only installation loses its receipt; unrecognized historical paths still require explicit review.
+
+## Pause automatic memory for testing
+
+These are manual user controls in the intended project:
+
+```sh
+mmx pause
+mmx status
+mmx resume
+```
+
+`pause` stops automatic Hook retrieval, context delivery and end-of-turn memory checks for this local project. It clears pending context caches and invalidates previous Codex review tokens. Resuming enables future hook events without replaying skipped tasks. Claude Code and Cursor require a new prompt before an end-of-turn check; startup or compaction alone cannot activate or repeat that check. No restart is required for the CLI's hooks to read the new state; the host must already have enabled/trusted hooks.
+
+Explicit Brain commands and MCP operations remain available for manual tests. This is not read-only mode or a Cloud permission change. Already delivered context cannot be withdrawn, and dispatched operations may still complete. Existing model instructions can remain in a running session; use a fresh session when testing with no previously delivered knowledge. Current Skill and MCP guidance tell Agents to check `brain status` before proactive work and respect `automation.paused`.
+
+The state is stored in ignored, local `.mindmux/cli/automation.json`, separately for each project/worktree. CLI upgrades, integration refreshes, Brain switches and repeated setup preserve it. `clean` removes it with the other local state; the default is enabled. `status` and `brain status` expose the current state. A malformed state suppresses automatic Hook output; an explicit `pause` or `resume` repairs it.
+
+The controls appear in user help but are deliberately absent from Agent command discovery, the Skill and MCP tools. Agents are instructed not to change automatic-memory settings unless the user explicitly asks. This is a workflow boundary, not an access restriction on an Agent that can execute arbitrary shell commands.

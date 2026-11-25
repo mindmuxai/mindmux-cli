@@ -42,6 +42,7 @@ Want a local Brain without Cloud login? Run `mmx setup --local` instead.
 | `mmx update` | Upgrade the CLI and refresh managed integrations |
 | `mmx doctor --fix` | Diagnose and repair setup |
 | `mmx switch` | Choose another Brain |
+| `mmx pause` / `mmx resume` | Manually pause/resume automatic memory for testing |
 | `mmx --help` | Show command help |
 | `mmx --skill` | Print the portable Agent Skill for using this CLI |
 
@@ -57,6 +58,7 @@ To start setup again, `mmx clean` resets local integration, binding, local Brain
 - [Agent-assisted installation](docs/agent-install.md) — non-interactive setup for agents.
 - [Cloud login](docs/cloud.md) — authentication and binding.
 - [Agent behavior](docs/agents.md) — hooks, memory reviews and limits.
+- [Machine interface](docs/machine-interface.md) — command schemas and structured errors.
 - [Development](docs/development.md) — tests and verification.
 
 ## License

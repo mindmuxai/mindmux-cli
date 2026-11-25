@@ -17,7 +17,14 @@ function fixture(t) {
   const home = join(dir, 'home');
   return { dir, root, home, env: { ...process.env, MINDMUX_HOME: home, CODEX_HOME: join(dir, 'codex') } };
 }
-const run = async (f, ...args) => JSON.parse((await exec(process.execPath, [bin, '--project', f.root, ...args, '--json'], { env: f.env })).stdout);
+const run = async (f, ...args) => {
+  try { return JSON.parse((await exec(process.execPath, [bin, '--project', f.root, ...args, '--json'], { env: f.env })).stdout); }
+  catch (error) {
+    const result = JSON.parse(error.stdout);
+    assert.equal(result.status, 'error'); assert.equal(error.stderr, '');
+    throw new Error(result.error);
+  }
+};
 const put = (path, value) => { mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, typeof value === 'string' ? value : JSON.stringify(value)); };
 function login(f) {
   put(join(f.home, 'auth', 'test.json'), { tokens: { access_token: 'fake-test-token' } });

@@ -1,3 +1,4 @@
+import { CliError } from './errors.mjs';
 import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync, chmodSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
@@ -63,7 +64,7 @@ export function binding(root) {
 }
 export function requireBinding(root) {
   const value = binding(root);
-  if (value.kind === 'unbound') throw new Error('No Brain selected. Run mmx init --local or mmx brain bind --brain-id <id>.');
+  if (value.kind === 'unbound') throw new CliError('BRAIN_UNBOUND', 'No Brain selected. Run mmx init --local or mmx brain bind --brain-id <id>.', { next: 'Run mmx setup -agent and ask the user to choose a Brain.' });
   return value;
 }
 export function ignoreRuntime(root, extraEntries = []) {

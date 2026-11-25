@@ -1,3 +1,4 @@
+import { CliError, errorResult } from './errors.mjs';
 import { existsSync, readFileSync, mkdirSync, rmSync, statSync, chmodSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { homedir } from 'node:os';
@@ -332,8 +333,8 @@ export async function setup(root, flags = {}, dependencies = {}) {
     const retry = recovery?.brainId
       ? `Cloud Project was created and retained. Resume without creating it again: mmx --project ${quote(root)} setup --brain-id ${quote(recovery.brainId)} --server ${quote(recovery.server)} --agent ${quote(selectedAgents)}`
       : 'Check the error above, then rerun the command. If Project creation has an unknown outcome, list Projects before retrying creation.';
-    if (machine) return { status: 'error', installed: false, stage, error: error.message, next: retry, ...(recovery?.brainId ? { recovery: { brainId: recovery.brainId, server: recovery.server } } : {}) };
-    throw new Error(`${stage} failed: ${error.message}\n${retry}`);
+    if (machine) return { ...errorResult(error), outcome: 'unknown', installed: false, stage, next: retry, ...(recovery?.brainId ? { recovery: { brainId: recovery.brainId, server: recovery.server } } : {}) };
+    throw new CliError(error instanceof CliError ? error.code : 'COMMAND_FAILED', `${stage} failed: ${error.message}\n${retry}`, { next: retry, outcome: error.outcome || 'unknown', cause: error });
   } finally {
     process.removeListener('exit', cleanup);
     process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', terminate); cleanup();

@@ -12,4 +12,5 @@ Start with `mmx setup` in your project. Use these guides when you need more deta
 | [Cloud login](cloud.md) | Authentication, Workspaces, Projects and explicit binding |
 | [Brain commands](brain.md) | Reading, writing, indexing, concurrency and low-level MCP access |
 | [Agent behavior](agents.md) | Retrieval, language, hooks, Codex reviews and known limits |
+| [Machine interface](machine-interface.md) | Offline command schemas, JSON errors and retry boundaries |
 | [Development](development.md) | Automated checks, demos and opt-in Cloud verification |

@@ -29,7 +29,8 @@ Use update with changeKind substantive (CLI --change-kind substantive, the defau
 For Cloud typos, formatting or erroneous initial content, use changeKind correction (CLI --change-kind correction), omit summary/source, and add no Timeline entry. Local brain.md supports substantive updates only; use a concise correction summary locally rather than requesting a Timeline-free correction.
 Use append only for durable evidence or events that do not change current content. A new decision that reverses an old requirement must update the body, not just append a reversal.`;
 
-export const MEMORY_POLICY = `Use this project's bound Brain proactively, even when the user does not mention memory.
+export const MEMORY_POLICY = `Do not change automatic memory settings unless the user explicitly asks. Before proactive Brain calls without current hook context, check brain status. If automation.paused is true, skip proactive reads and writes; explicit user-requested Brain operations remain available.
+Use this project's bound Brain proactively, even when the user does not mention memory.
 Read relevant current pages before making decisions. Capture confirmed requirements, constraints and durable decisions when they settle.
 Do not turn proposals, guesses or routine implementation details into settled truth. No new durable knowledge is a valid outcome.
 Search/read before creating or updating; use the version returned by read for updates. Never hand-edit Brain files or switch the bound Brain implicitly.

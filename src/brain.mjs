@@ -1,3 +1,4 @@
+import { CliError } from './errors.mjs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -75,7 +76,7 @@ export async function withBrain(root, run) {
   const read = id => { idCheck(id); return normalize(api.loadDoc(join(target.directory, 'pages', `${id}.md`))); };
   const list = () => api.listPages().filter(p => p.frontmatter.status === 'active').map(normalize);
   const checkVersion = (current, expected) => {
-    if (!expected || String(current.version) !== String(expected)) throw new Error('Version conflict or missing --expected-version. Read the current page before updating.');
+    if (!expected || String(current.version) !== String(expected)) throw new CliError('VERSION_CONFLICT', 'Version conflict or missing --expected-version. Read the current page before updating.', { next: 'Read the complete current page, reconcile changes and update using its returned version.' });
   };
   const roots = () => api.listRootPages().map(doc => ({ slug: doc.id, title: doc.frontmatter.title, version: version(doc.raw), updated: doc.frontmatter.updated }));
   const index = () => {

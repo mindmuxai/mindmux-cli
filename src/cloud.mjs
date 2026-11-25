@@ -1,3 +1,4 @@
+import { CliError, upstreamError } from './errors.mjs';
 import { VERSION } from './version.mjs';
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
@@ -99,12 +100,12 @@ export class AuthProvider {
   tokens() { return this.data.tokens; }
   saveTokens(tokens) { this.data.tokens = tokens; this.save(); }
   saveCodeVerifier(verifier) {
-    if (!this.interactive) throw new Error('Cloud login required. Run mmx login.');
+    if (!this.interactive) throw new CliError('AUTH_REQUIRED', 'Cloud login required. Run mmx login.', { next: 'Run mmx login --non-interactive --json to authorize, then retry.' });
     this.verifier = verifier;
   }
   codeVerifier() { if (!this.verifier) throw new Error('Missing OAuth verifier. Run mmx login again.'); return this.verifier; }
   redirectToAuthorization(url) {
-    if (!this.interactive) throw new Error('Cloud login required. Run mmx login.');
+    if (!this.interactive) throw new CliError('AUTH_REQUIRED', 'Cloud login required. Run mmx login.', { next: 'Run mmx login --non-interactive --json to authorize, then retry.' });
     this.onRedirect(url);
   }
   invalidateCredentials(scope) {
@@ -121,7 +122,7 @@ export async function withCloud(server, run) {
   server = serverUrl(server);
   return withAuthLock(server, async () => {
     const provider = new AuthProvider(server);
-    if (!provider.tokens()) throw new Error(`Cloud login required. Run mmx login --server ${server}.`);
+    if (!provider.tokens()) throw new CliError('AUTH_REQUIRED', `Cloud login required. Run mmx login --server ${server}.`, { next: `Run mmx login --server ${server} --non-interactive --json to authorize, then retry.` });
     const client = new Client({ name: 'mindmux-cli', version: VERSION });
     const transport = new StreamableHTTPClientTransport(new URL(server), { authProvider: provider,
       fetch: timedFetch, reconnectionOptions: { maxRetries: 0 } });
@@ -130,7 +131,7 @@ export async function withCloud(server, run) {
       const call = async (name, args = {}) => {
         const result = await call.raw(name, args);
         const text = result.content?.filter(item => item.type === 'text').map(item => item.text).join('\n') || '';
-        if (result.isError) throw new Error(text || `MCP ${name} failed`);
+        if (result.isError) throw upstreamError(result, `MCP ${name} failed`);
         if (result.structuredContent) return result.structuredContent;
         try { return JSON.parse(text); } catch { return { text }; }
       };
